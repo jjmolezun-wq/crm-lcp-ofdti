@@ -26,7 +26,24 @@ Comptes de démonstration :
 ## Tests
 
 ```bash
-python3 tests.py   # démarre une instance isolée et joue 15 scénarios de bout en bout
+python3 tests.py   # démarre une instance isolée et joue 20 scénarios de bout en bout
+```
+
+## Visuels (captures d'écran SVG des vrais écrans)
+
+Régénération : lancer l'app, capturer les pages HTML, puis
+`python3 tools/render_screenshots.py <dossier_pages_html> docs/screenshots`.
+
+- [01 — Connexion](docs/screenshots/01-connexion.svg)
+- [02 — Tableau de bord admin](docs/screenshots/02-tableau-de-bord-admin.svg)
+- [03 — Liste des dossiers](docs/screenshots/03-dossiers.svg)
+- [04 — Détail d'un dossier](docs/screenshots/04-dossier-detail.svg)
+- [05 — Registre des certificats OFDTI](docs/screenshots/05-certificats.svg)
+- [06 — Certificat imprimable](docs/screenshots/06-certificat-imprimable.svg)
+- [07 — Factures](docs/screenshots/07-factures.svg)
+- [08 — Notifications](docs/screenshots/08-notifications.svg)
+- [09 — Administration (utilisateurs)](docs/screenshots/09-admin-utilisateurs.svg)
+- [10 — Tableau de bord candidat](docs/screenshots/10-tableau-de-bord-candidat.svg)
 ```
 
 ## Fonctionnalités du prototype
