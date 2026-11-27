@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 import zlib
 
 SVGNS = "{http://www.w3.org/2000/svg}"
-SCALE = 2
+SCALE = 1  # largeur finale des PNG = largeur réelle de la page (1200px) : affichage 1:1 lisible
 
 # Police 5x7 (7 lignes de 5 colonnes), caractères ASCII + accents aplatis.
 F = {
@@ -122,7 +122,7 @@ F = {
 
 ACCENTS = {"é":"e","è":"e","ê":"e","ë":"e","à":"a","â":"a","ä":"a","ç":"c","î":"i","ï":"i",
            "ô":"o","ö":"o","ù":"u","û":"u","ü":"u","ÿ":"y","É":"E","È":"E","Ê":"E","À":"A",
-           "Â":"A","Ç":"C","Î":"I","Ô":"O","Ù":"U","Û":"U"}
+           "Â":"A","Ç":"C","Î":"I","Ô":"O","Ù":"U","Û":"U","•":"·"}
 
 
 def norm(ch):
@@ -133,8 +133,10 @@ def glyph(ch):
     return F.get(norm(ch), F.get(ch.upper(), F["?"]))
 
 
-SS = 3  # sur-échantillonnage : le rendu se fait à SCALE*SS puis est moyenné (anti-crénelage)
+SS = 4  # sur-échantillonnage des formes (rect/ligne) avant moyenne ; le texte est
+        # dessiné ensuite, à la résolution finale, avec des glyphes lissés (alpha)
 
+import math
 from operator import add as _add
 
 
@@ -193,30 +195,60 @@ class Img:
                 err += dx
                 y1 += sy
 
-    _runs_cache = {}
+    _alpha_cache = {}
 
-    def _glyph_runs(self, ch, scale):
-        key = (ch, scale)
-        runs = self._runs_cache.get(key)
-        if runs is None:
-            g = glyph(ch)
-            runs = []
-            for r in range(7):
-                row = g[r] if r < len(g) else ""
-                c = 0
-                while c < 5:
-                    if c < len(row) and row[c] == "#":
-                        c0 = c
-                        while c < len(row) and row[c] == "#":
-                            c += 1
-                        runs.append((r, c0, c))
-                    else:
-                        c += 1
-            self._runs_cache[key] = runs
-        return runs
+    def _alpha_glyph(self, ch, scale, bold):
+        """Glyphe 5x7 rendu en interne à 4x avec un noyau gaussien, puis moyenné :
+        atlas final (5*scale)x(7*scale), bords lisses, alpha 0-255."""
+        key = (ch, scale, bold)
+        atlas = self._alpha_cache.get(key)
+        if atlas is not None:
+            return atlas
+        g = glyph(ch)
+        rows = [(row + ".....")[:5] for row in (list(g) + [""] * 7)[:7]]
+        GS = 4
+        hs = scale * GS
+        w, h = 5 * hs, 7 * hs
+        sx = 0.95 if bold else 0.70
+        sy = 0.70
+        ix = 1.0 / (2.0 * sx * sx)
+        iy = 1.0 / (2.0 * sy * sy)
+        hi = []
+        for py in range(h):
+            cy = (py + 0.5) / hs
+            row = bytearray(w)
+            for pxi in range(w):
+                cx = (pxi + 0.5) / hs
+                s = 0.0
+                for r in range(7):
+                    wy = (cy - r - 0.5) ** 2 * iy
+                    if wy > 4.0:
+                        continue
+                    gr = rows[r]
+                    for c in range(5):
+                        if gr[c] == "#":
+                            e = (cx - c - 0.5) ** 2 * ix + wy
+                            if e <= 4.0:
+                                s += math.exp(-e)
+                row[pxi] = int(min(s, 1.0) * 255 + 0.5)
+            hi.append(bytes(row))
+        atlas = []
+        for py in range(7 * scale):
+            row = bytearray(5 * scale)
+            for pxi in range(5 * scale):
+                acc = 0
+                for k in range(GS):
+                    hr = hi[py * GS + k]
+                    base = pxi * GS
+                    for j in range(GS):
+                        acc += hr[base + j]
+                row[pxi] = acc // (GS * GS)
+            atlas.append(bytes(row))
+        self._alpha_cache[key] = atlas
+        return atlas
 
-    def text(self, x, y, s, size, fill, anchor="start"):
-        # size : hauteur de police en pixels du buffer de rendu (SVG * SCALE * SS)
+    def text(self, x, y, s, size, fill, anchor="start", bold=False):
+        # size : hauteur de police en pixels de l'image FINALE
         scale = max(1, round(size / 7.0))
         cw = 6 * scale
         total = cw * len(s)
@@ -226,21 +258,34 @@ class Img:
             x -= total // 2
         elif anchor == "end":
             x -= total
-        frow = bytes(fill)
+        f0, f1, f2 = fill
+        px = self.px
+        W, H = self.w, self.h
         for ch in s:
-            for (r, c0, c1) in self._glyph_runs(ch, scale):
-                runw = (c1 - c0) * scale
-                row = frow * runw
-                x0 = x + c0 * scale
-                if x0 < 0:
+            atlas = self._alpha_glyph(ch, scale, bold)
+            for py, row in enumerate(atlas):
+                yy = y + py
+                if yy < 0 or yy >= H:
                     continue
-                for dy in range(scale):
-                    yy = y + r * scale + dy
-                    if 0 <= yy < self.h:
-                        base = (yy * self.w + x0) * 3
-                        end = base + runw * 3
-                        if end <= len(self.px):
-                            self.px[base:end] = row
+                base = yy * W * 3
+                for pxi in range(len(row)):
+                    a = row[pxi]
+                    if a == 0:
+                        continue
+                    xx = x + pxi
+                    if xx < 0 or xx >= W:
+                        continue
+                    i = base + xx * 3
+                    if a >= 255:
+                        px[i] = f0
+                        px[i + 1] = f1
+                        px[i + 2] = f2
+                    else:
+                        f = a * (1.0 / 255.0)
+                        g = 1.0 - f
+                        px[i] = int(px[i] * g + f0 * f)
+                        px[i + 1] = int(px[i + 1] * g + f1 * f)
+                        px[i + 2] = int(px[i + 2] * g + f2 * f)
             x += cw
 
     def save_png(self, path):
@@ -304,36 +349,41 @@ def render_svg(svg_path, png_path):
     W = int(_num(root.get("width")))
     H = int(_num(root.get("height")))
     R = SCALE * SS
-    img = Img(W * R, H * R)
+    buf = Img(W * R, H * R)
+    out = Img(W * SCALE, H * SCALE)
 
-    def walk(el, ox, oy):
+    def walk(el, ox, oy, phase):
         for child in el:
             tag = child.tag.replace(SVGNS, "")
             x = ox + _num(child.get("x"))
             y = oy + _num(child.get("y"))
             if tag == "rect":
-                img.rect(x * R, y * R, _num(child.get("width")) * R, _num(child.get("height")) * R,
-                         fill=parse_color(child.get("fill")), stroke=parse_color(child.get("stroke")),
-                         sw=max(1, int(_num(child.get("stroke-width", "1")) * R)))
+                if phase == 0:
+                    buf.rect(x * R, y * R, _num(child.get("width")) * R, _num(child.get("height")) * R,
+                             fill=parse_color(child.get("fill")), stroke=parse_color(child.get("stroke")),
+                             sw=max(1, int(_num(child.get("stroke-width", "1")) * R)))
             elif tag == "line":
-                img.line((ox + _num(child.get("x1"))) * R, (oy + _num(child.get("y1"))) * R,
-                         (ox + _num(child.get("x2"))) * R, (oy + _num(child.get("y2"))) * R,
-                         parse_color(child.get("stroke"), (200, 200, 200)),
-                         sw=max(1, int(_num(child.get("stroke-width", "1")) * R)))
+                if phase == 0:
+                    buf.line((ox + _num(child.get("x1"))) * R, (oy + _num(child.get("y1"))) * R,
+                             (ox + _num(child.get("x2"))) * R, (oy + _num(child.get("y2"))) * R,
+                             parse_color(child.get("stroke"), (200, 200, 200)),
+                             sw=max(1, int(_num(child.get("stroke-width", "1")) * R)))
             elif tag == "path":
                 pass  # camemberts : ignorés en PNG (les barres suffisent)
             elif tag == "text":
-                size = _num(child.get("font-size"), 14)
-                content = "".join(child.itertext())
-                img.text(x * R, (y - size * 0.8) * R, content, size * R,
-                         parse_color(child.get("fill"), (28, 39, 51)),
-                         anchor=child.get("text-anchor", "start"))
+                if phase == 1:
+                    size = _num(child.get("font-size"), 14)
+                    content = "".join(child.itertext())
+                    out.text(x * SCALE, (y - size * 0.8) * SCALE, content, size * SCALE,
+                             parse_color(child.get("fill"), (28, 39, 51)),
+                             anchor=child.get("text-anchor", "start"),
+                             bold=child.get("font-weight") in ("bold", "600", "700"))
             else:
-                walk(child, x, y)
+                walk(child, x, y, phase)
 
-    walk(root, 0, 0)
-    out = Img(W * SCALE, H * SCALE)
-    out.px = downsample(img.px, img.w, img.h, SS)
+    walk(root, 0, 0, 0)
+    out.px = downsample(buf.px, buf.w, buf.h, SS)
+    walk(root, 0, 0, 1)
     out.save_png(png_path)
     return W, H
 
