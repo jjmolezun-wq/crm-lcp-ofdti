@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -254,6 +255,98 @@ def page_rapport_audit(dossier, candidat, lignes):
             y -= 13
         y -= 8
     return {"shapes": [], "lines": lines}
+
+
+PIECES_DEMANDE = [
+    "Le présent document complété et signé.",
+    "Extrait K-bis de moins de trois mois.",
+    "Certification Qualiopi le cas échéant.",
+    "Capacités professionnelles : CV du représentant légal et des formateurs, diplômes/titres/certifications/habilitations, organigramme, répartition des rôles.",
+    "Capacités techniques : locaux, équipements pédagogiques, moyens numériques (plateforme FOAD…).",
+    "Capacités financières : comptes annuels, attestation URSSAF de vigilance, attestation fiscale de régularité, business plan le cas échéant.",
+    "Moyens pédagogiques : programme détaillé de formation, méthodes et moyens, modalités d'évaluation, liste des sites (multisite).",
+]
+
+
+def page_demande(dossier, candidat, domaines_sel, types_sel, domaines_all, adresse_lcp, mail_lcp, tel_lcp):
+    infos = {}
+    try:
+        infos = json.loads(candidat["infos_of"]) if candidat["infos_of"] else {}
+    except Exception:
+        infos = {}
+    shapes = [("rect", 36, 36, PAGE_W - 72, PAGE_H - 72, BRAND, False)]
+    lines = [(60, 788, 20, "DONNÉES TECHNIQUES DE DEMANDE DE CERTIFICATION OFDTI", True, BRAND)]
+    lines.append((60, 768, 11, f"Dossier n° {dossier['numero']} — 1ère étape du processus de certification (Élément technique de demande, réf. V0010)", False, None))
+    y = 736
+    lines.append((60, y, 13, "IDENTIFICATION DE L'ORGANISME DE FORMATION (SITE PRINCIPAL)", True, BRAND))
+    y -= 20
+    siret = candidat["siret"] or ""
+    for label, val in (("Raison sociale", candidat["organisme"] or candidat["nom"]),
+                       ("Code APE", infos.get("code_ape") or "—"),
+                       ("N° SIREN", siret[:9] if siret else "—"),
+                       ("N° de TVA intracommunautaire", infos.get("tva_intracom") or "—"),
+                       ("N° d'enregistrement de la déclaration d'activité", candidat["numero_enregistrement"] or "—"),
+                       ("Adresse du siège", candidat["adresse"] or "—"),
+                       ("Dirigeant", infos.get("dirigeant") or "—"),
+                       ("Contact identifié", " / ".join(x for x in [infos.get("contact_nom"), infos.get("contact_fonction"), infos.get("contact_tel"), infos.get("contact_mail")] if x) or "—"),
+                       ("Effectifs impliqués dans la formation", infos.get("effectifs_formation") or "—"),
+                       ("Nombre de formateurs", infos.get("nb_formateurs") or "—")):
+        for ln in wrap_text(f"{label} : {val}", 10, PAGE_W - 140):
+            lines.append((60, y, 10, ln, False, None))
+            y -= 13
+    y -= 12
+    lines.append((60, y, 13, "PÉRIMÈTRE DE LA DEMANDE — DOMAINES × TYPES DE FORMATION", True, BRAND))
+    y -= 8
+    cols = ["FIP", "FID", "FCP", "FCD", "FPT"]
+    x_dom, w_dom = 60, 240
+    w_col = 50
+    tbl_x, tbl_w = 60, w_dom + w_col * len(cols)
+    row_h = 14
+    n_rows = 1 + len(domaines_all)
+    tbl_top = y
+    tbl_bot = y - n_rows * row_h
+    for i in range(n_rows + 1):
+        yy = tbl_top - i * row_h
+        shapes.append(("line", tbl_x, yy, tbl_x + tbl_w, yy, (0.75, 0.75, 0.75)))
+    for xx in [tbl_x, tbl_x + w_dom] + [tbl_x + w_dom + i * w_col for i in range(1, len(cols))] + [tbl_x + tbl_w]:
+        shapes.append(("line", xx, tbl_top, xx, tbl_bot, (0.75, 0.75, 0.75)))
+    lines.append((tbl_x + 4, tbl_top - 10, 8, "Formation / Domaine", True, BRAND))
+    for i, c in enumerate(cols):
+        lines.append((tbl_x + w_dom + i * w_col + 16, tbl_top - 10, 8, c, True, BRAND))
+    for r, (code, lib) in enumerate(domaines_all, start=1):
+        yy = tbl_top - r * row_h - 10
+        selected = code in (domaines_sel or [])
+        lines.append((tbl_x + 4, yy, 8, lib, selected, None))
+        for i, c in enumerate(cols):
+            mark = "X" if (selected and c in (types_sel or [])) else " "
+            lines.append((tbl_x + w_dom + i * w_col + 20, yy, 8, mark, selected, None))
+    y = tbl_bot - 20
+    lines.append((60, y, 12, "DOCUMENTS À FOURNIR POUR LA VALIDATION DE LA DEMANDE", True, BRAND))
+    y -= 18
+    for p in PIECES_DEMANDE:
+        for ln in wrap_text("- " + p, 9, PAGE_W - 130):
+            lines.append((70, y, 9, ln, False, None))
+            y -= 12
+    y -= 10
+    lines.append((60, y, 10, "Par la signature de ce document, l'organisme atteste l'exactitude des renseignements fournis et avoir pris connaissance du programme de certification (www.lcp-certification.fr).", False, None))
+    y -= 22
+    lines.append((60, y, 11, "POUR L'ENTREPRISE — Fait le : ____________  À : ____________", False, None))
+    y -= 16
+    lines.append((60, y, 11, "Nom : ______________________   Signature :", False, None))
+    y -= 24
+    lines.append((60, y, 11, "Merci de retourner ce document complété et signé à :", True, BRAND))
+    y -= 15
+    lines.append((60, y, 10, adresse_lcp, False, None))
+    y -= 14
+    lines.append((60, y, 10, f"ou par mail : {mail_lcp} — Tél : {tel_lcp}", False, None))
+    return {"shapes": shapes, "lines": lines}
+
+
+def demande_pdf(dossier, candidat, domaines_sel, types_sel, domaines_all, params):
+    return build_pdf([page_demande(dossier, candidat, domaines_sel, types_sel, domaines_all,
+                                    params.get("adresse_lcp", "L.C.P Certification — 30, avenue de Canteranne – 33600 PESSAC"),
+                                    params.get("email_contact", "ofdti@lcp-certification.fr"),
+                                    params.get("tel_lcp", "05.33.89.39.30"))])
 
 
 def certificat_pdf_unsigned(cert, dossier, candidat, mentions, domaines_sel, types_sel, domaines_all, lieu, signataire):

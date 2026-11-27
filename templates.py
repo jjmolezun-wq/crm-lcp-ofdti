@@ -98,7 +98,7 @@ def layout(user, title, body, unread=0):
         if user["role"] in ("admin", "auditeur"):
             nav += '<a href="/stats">Statistiques</a>'
         if user["role"] == "candidat":
-            nav += '<a href="/dossiers/nouveau">+ Nouveau dossier</a>'
+            nav += '<a href="/dossiers/nouveau">+ Nouveau dossier</a><a href="/profil">Mon organisme</a>'
         if user["role"] == "admin":
             nav += '<a href="/admin">Administration</a>'
         notif = f'<a href="/notifications">Notifications{" (" + str(unread) + ")" if unread else ""}</a>'
@@ -211,7 +211,7 @@ def page_dossier_new(user, csrf, domaines, types, error=None):
     return layout(user, "Nouveau dossier", body)
 
 
-def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, facture, trans, csrf, msg=None, erreur=None, portee=""):
+def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, facture, trans, csrf, msg=None, erreur=None, portee="", demande_envoyee=None, demande_signee=False):
     flash = f'<div class="flash">{esc(msg)}</div>' if msg else ""
     err = f'<div class="erreur">{esc(erreur)}</div>' if erreur else ""
     hist_rows = "".join(
@@ -219,7 +219,7 @@ def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, factur
         f'<td>{badge_statut(h["ancien"]) if h["ancien"] else "—"} → {badge_statut(h["nouveau"])}</td><td>{esc(h["commentaire"] or "")}</td></tr>'
         for h in hist)
     pieces_rows = "".join(
-        f'<tr><td><a href="/pieces/{p["id"]}">{esc(p["nom"])}</a></td><td class="muted">{p["taille"]} o</td>'
+        f'<tr><td><a href="/pieces/{p["id"]}">{esc(p["nom"])}</a></td><td class="muted">{esc(p["categorie"] or "autre")}</td><td class="muted">{p["taille"]} o</td>'
         f'<td class="muted">{esc(users.get(p["uploader_id"], {}).get("nom", "?"))}</td><td class="muted">{fmt_date(p["at"])}</td>'
         f'<td><form method="post" action="/pieces/{p["id"]}/supprimer" style="display:inline">{hidden_csrf(csrf)}<button class="btn small danger">Supprimer</button></form></td></tr>'
         for p in pieces)
@@ -250,7 +250,17 @@ def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, factur
 <tr><th>Délivré le</th><td>{fmt_date_jour(cert["date_delivrance"])}</td></tr>
 <tr><th>Expire le</th><td>{fmt_date_jour(cert["date_expiration"])} ({jr} j restants)</td></tr>
 <tr><th>Statut</th><td>{badge_statut("ok" if cert["statut"] == "valide" else "muted")} {esc(cert["statut"])}</td></tr>
-<tr><th>Documents</th><td><a class="btn small" href="/certificats/{cert["id"]}/print" target="_blank">Certificat (aperçu)</a> <a class="btn small" href="/certificats/{cert["id"]}/pdf">PDF signé</a> <a class="btn small secondary" href="/certificats/{cert["id"]}/verify" target="_blank">Vérifier la signature</a>{renouveler}</td></tr></table></div>"""
+<tr><th>Documents</th><td><a class="btn small" href="/certificats/{cert["id"]}/document">Certificat Word (modèle officiel V007 rempli)</a> <a class="btn small" href="/certificats/{cert["id"]}/pdf">PDF signé</a> <a class="btn small secondary" href="/certificats/{cert["id"]}/print" target="_blank">Aperçu</a> <a class="btn small secondary" href="/certificats/{cert["id"]}/verify" target="_blank">Vérifier la signature</a>{renouveler}</td></tr></table></div>"""
+    envoyer_btn = ""
+    if user["role"] == "admin":
+        envoyer_btn = f'<form method="post" action="/dossiers/{d["id"]}/envoyer-demande" style="display:inline">{hidden_csrf(csrf)}<button class="btn small">Envoyer la demande à l\'OF</button></form>'
+    demande_html = f"""
+<div class="card"><h2>Demande de certification — Élément technique (V0010)</h2>
+<table>
+<tr><th>Document à retourner signé</th><td><a class="btn small" href="/dossiers/{d["id"]}/demande-document">Télécharger le document Word pré-rempli (V0010)</a> <a class="btn small secondary" href="/dossiers/{d["id"]}/demande.pdf">Aperçu PDF pré-rempli</a></td></tr>
+<tr><th>Envoi à l\'OF</th><td>{"envoyée le " + fmt_date(demande_envoyee) if demande_envoyee else "non envoyée"} {envoyer_btn}</td></tr>
+<tr><th>Retour complété et signé</th><td>{"<span class=\"badge ok\">reçu</span>" if demande_signee else "<span class=\"badge warn\">en attente</span> (pièce « demande signée » requise avant recevabilité)"}</td></tr>
+</table></div>"""
     fac_html = ""
     if facture:
         payer = f'<form method="post" action="/factures/{facture["id"]}/payer" style="display:inline">{hidden_csrf(csrf)}<button class="btn small">Marquer payée</button></form>' if user["role"] == "admin" and facture["statut"] != "payee" else ""
@@ -275,12 +285,14 @@ def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, factur
 {"<tr><th>Décision</th><td>" + esc(d["decision"] or "") + " le " + fmt_date(d["decision_at"]) + (" — motif : " + esc(d["motif"] or "") if d["motif"] else "") + "</td></tr>" if d["decision_at"] else ""}
 </table></div>
 {action_html}
+{demande_html}
 {cert_html}{fac_html}
 <div class="card"><h2>Pièces justificatives</h2>
-<table><tr><th>Fichier</th><th>Taille</th><th>Déposé par</th><th>Date</th><th></th></tr>{pieces_rows}</table>
+<table><tr><th>Fichier</th><th>Catégorie</th><th>Taille</th><th>Déposé par</th><th>Date</th><th></th></tr>{pieces_rows}</table>
 {"<p class='muted'>Aucune pièce.</p>" if not pieces_rows else ""}
 <form method="post" action="/dossiers/{{d_id}}/pieces" enctype="multipart/form-data" style="margin-top:10px" class="row">
 {hidden_csrf(csrf)}<input type="file" name="fichier" required style="width:auto">
+<select name="categorie" style="width:auto"><option value="autre">autre</option><option value="demande_signee">demande signée (retour OF)</option><option value="kbis">K-bis</option><option value="qualiopi">Qualiopi</option><option value="capacites">capacités pro/tech/fin</option><option value="moyens">moyens pédagogiques</option><option value="dossier_candidature">dossier de candidature signé</option><option value="facture">facture</option></select>
 <button class="btn small" type="submit">Téléverser</button></form></div>
 <div class="card"><h2>Échanges</h2>{com_rows}{"<p class='muted'>Aucun message.</p>" if not com_rows else ""}
 <form method="post" action="/dossiers/{d["id"]}/commentaires" style="margin-top:10px">{hidden_csrf(csrf)}
@@ -464,6 +476,36 @@ def page_verify(user, cert, ok, details):
 <table>{rows}</table></div>
 <p><a href="/certificats/{cert["id"]}/pdf">Télécharger le PDF signé</a> · <a href="/api/pubkey">Clé publique</a></p>"""
     return layout(user, f"Vérification {cert['numero']}", body)
+
+
+def page_profil(user, infos, csrf, msg=""):
+    flash = f'<div class="flash">{esc(msg)}</div>' if msg else ""
+    def val(k, col=None):
+        if col:
+            return esc(user[col] or "")
+        return esc(infos.get(k, ""))
+    body = f"""
+<h1>Mon organisme de formation</h1>
+{flash}
+<div class="card"><p class="muted">Ces informations pré-remplissent l'élément technique de demande de certification (V0010) envoyé à LCP. Elles servent aussi au certificat OFDTI.</p>
+<form method="post" action="/profil" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+{hidden_csrf(csrf)}
+<div><label>Raison sociale</label><input type="text" name="organisme" value="{val('', 'organisme')}"></div>
+<div><label>N° SIREN</label><input type="text" name="siret" value="{val('', 'siret')}"></div>
+<div><label>N° d'enregistrement (déclaration d'activité)</label><input type="text" name="numero_enregistrement" value="{val('', 'numero_enregistrement')}"></div>
+<div><label>Code APE</label><input type="text" name="code_ape" value="{val('code_ape')}"></div>
+<div><label>N° TVA intracommunautaire</label><input type="text" name="tva_intracom" value="{val('tva_intracom')}"></div>
+<div><label>Adresse du siège</label><input type="text" name="adresse" value="{val('', 'adresse')}"></div>
+<div><label>Dirigeant (nom)</label><input type="text" name="dirigeant" value="{val('dirigeant')}"></div>
+<div><label>Contact — nom</label><input type="text" name="contact_nom" value="{val('contact_nom')}"></div>
+<div><label>Contact — fonction</label><input type="text" name="contact_fonction" value="{val('contact_fonction')}"></div>
+<div><label>Contact — tél.</label><input type="text" name="contact_tel" value="{val('contact_tel')}"></div>
+<div><label>Contact — e-mail</label><input type="email" name="contact_mail" value="{val('contact_mail')}"></div>
+<div><label>Effectifs impliqués dans la formation</label><input type="text" name="effectifs_formation" value="{val('effectifs_formation')}"></div>
+<div><label>Nombre de formateurs</label><input type="text" name="nb_formateurs" value="{val('nb_formateurs')}"></div>
+<div style="align-self:end"><button class="btn" type="submit">Enregistrer</button></div>
+</form></div>"""
+    return layout(user, "Mon organisme", body)
 
 
 def page_documents(user, fichiers):

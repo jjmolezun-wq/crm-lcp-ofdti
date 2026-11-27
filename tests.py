@@ -36,6 +36,19 @@ def post_multi(op, path, pairs):
     return op.open(BASE + path, urllib.parse.urlencode(pairs).encode(), timeout=10)
 
 
+def post_multipart(op, path, fields, filename, content):
+    boundary = "----vibetestboundary"
+    parts = []
+    for k, v in fields:
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode())
+    parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"fichier\"; filename=\"{filename}\"\r\nContent-Type: application/pdf\r\n\r\n".encode() + content + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    body = b"".join(parts)
+    req = urllib.request.Request(BASE + path, data=body,
+                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    return op.open(req, timeout=10)
+
+
 def csrf_of(html_text):
     m = re.search(r'name="csrf" value="([^"]+)"', html_text)
     return m.group(1) if m else ""
@@ -97,8 +110,18 @@ def main():
         admin = make_opener()
         page = login(admin, "admin@lcp.fr", "admin123")
         csrf = csrf_of(get(admin, "/admin/users").read().decode("utf-8"))
-        for statut in ("en_recevabilite", "recevable", "en_audit", "certifie"):
+        page = get(admin, f"/dossiers/{did}").read().decode("utf-8")
+        post(admin, f"/dossiers/{did}/statut", {"csrf": csrf, "statut": "en_recevabilite", "commentaire": "revue"})
+        r = post(admin, f"/dossiers/{did}/statut", {"csrf": csrf, "statut": "recevable", "commentaire": "test sans demande signée"})
+        page = r.read().decode("utf-8")
+        check("recevabilité bloquée sans demande signée retournée", "signée" in page)
+        csrf_cand = csrf_of(get(cand, f"/dossiers/{did}").read().decode("utf-8"))
+        post_multipart(cand, f"/dossiers/{did}/pieces", [("csrf", csrf_cand), ("categorie", "demande_signee")], "demande_signee.pdf", b"%PDF-1.4 signe")
+        post(admin, f"/dossiers/{did}/statut", {"csrf": csrf, "statut": "recevable", "commentaire": "demande signée reçue"})
+        for statut in ("en_audit", "certifie"):
             post(admin, f"/dossiers/{did}/statut", {"csrf": csrf, "statut": statut, "commentaire": f"vers {statut}"})
+        page = get(admin, f"/dossiers/{did}").read().decode("utf-8")
+        check("demande signée reçue affichée", "reçu" in page)
         page = get(admin, f"/dossiers/{did}").read().decode("utf-8")
         check("dossier certifié", "Certifié OFDTI" in page)
         check("certificat créé sur le dossier", "OFDTI-" in page)
@@ -117,6 +140,13 @@ def main():
             check("PDF signé généré", r.status == 200 and pdfb.startswith(b"%PDF") and "pdf" in (r.headers.get("Content-Type") or ""))
             check("PDF conforme au modèle OFDTI (titre, domaines, types)",
                   b"Certificat OFDTI" in pdfb and b"DPE sans mention" in pdfb and b"FIP" in pdfb and b"Pessac" in pdfb)
+            rdoc = get(admin, f"/certificats/{cid}/document")
+            docb = rdoc.read()
+            import zipfile as zf, io as _io
+            zx = zf.ZipFile(_io.BytesIO(docb))
+            docxml = zx.read("word/document.xml").decode("utf-8")
+            check("certificat Word = modèle officiel V007 rempli", "OFDTI-" in docxml and "Société Exemple" in docxml)
+            check("cases cochées ☒ = portée sélectionnée (2 domaines × 2 types = 4)", docxml.count("\u2612") == 4, str(docxml.count("\u2612")))
             ver = get(admin, f"/certificats/{cid}/verify").read().decode("utf-8")
             check("vérification signature RSA valide", "signature valide" in ver)
             pub = get(admin, "/api/pubkey").read().decode("utf-8")
@@ -131,7 +161,20 @@ def main():
         outbox2 = get(admin, "/admin/outbox").read().decode("utf-8")
         check("outbox: e-mails simulés sans SMTP", "simulé" in outbox2)
         docs = get(admin, "/documents").read().decode("utf-8")
-        check("page documents de référence (procédure V016, modèle certificat)", "Procedure_certification_OFDTI_V016.docx" in docs and "Modele_certificat_OFDTI_V007.docx" in docs)
+        check("page documents de référence (procédure V016, modèle certificat, demande V0010)",
+              "Procedure_certification_OFDTI_V016.docx" in docs and "Modele_certificat_OFDTI_V007.docx" in docs
+              and "Element_technique_demande_certification_V0010.docx" in docs)
+        rdem = get(cand, f"/dossiers/{did}/demande-document")
+        demb = rdem.read()
+        import zipfile as zf2, io as _io2
+        zx2 = zf2.ZipFile(_io2.BytesIO(demb))
+        demxml = zx2.read("word/document.xml").decode("utf-8")
+        check("demande Word V0010 pré-remplie (identité OF)", "Société Exemple" in demxml and "OFDTI" in demxml)
+        post(cand, "/profil", {"csrf": csrf_cand, "organisme": "Société Exemple SARL", "siret": "12345678900012",
+                               "numero_enregistrement": "11-33-000000-01", "adresse": "10 avenue des Services, 69001 Lyon",
+                               "code_ape": "8559A", "dirigeant": "Jean Dupont"})
+        prof = get(cand, "/profil").read().decode("utf-8")
+        check("profil OF enregistré (code APE 8559A)", "8559A" in prof)
 
         mcert = re.search(r"/certificats/(\d+)/print", get(cand, "/certificats").read().decode("utf-8"))
         if mcert:

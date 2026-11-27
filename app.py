@@ -5,15 +5,17 @@ import os
 import re
 import secrets
 import sys
+import tempfile
 from datetime import timedelta
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote as urlquote, urlparse
 
 import automations
 import charts
 import db
+import docx_fill
 import pdf as pdfgen
 import templates as t
 from workflow import STATUTS, peut_voir_dossier, transitions_possibles
@@ -162,7 +164,7 @@ def respond(ctx, body, status=200, ctype="text/html; charset=utf-8", headers=Non
 
 
 def redirect(ctx, location, headers=None):
-    respond(ctx, "", status=303, headers={"Location": location, **(headers or {})})
+    respond(ctx, "", status=303, headers={"Location": urlquote(location, safe="/?=&"), **(headers or {})})
 
 
 def page(ctx, title, body):
@@ -374,7 +376,7 @@ def dossier_detail(ctx, did):
         "SELECT * FROM historique WHERE dossier_id = ? ORDER BY at, id", (d["id"],)
     ).fetchall()
     pieces = ctx.conn.execute(
-        "SELECT id, dossier_id, nom, taille, uploader_id, at FROM pieces WHERE dossier_id = ? ORDER BY at DESC", (d["id"],)
+        "SELECT id, dossier_id, nom, categorie, taille, uploader_id, at FROM pieces WHERE dossier_id = ? ORDER BY at DESC", (d["id"],)
     ).fetchall()
     if ctx.user["role"] == "candidat":
         commentaires = ctx.conn.execute(
@@ -392,7 +394,12 @@ def dossier_detail(ctx, did):
     trans = transitions_possibles(ctx.user, d)
     msg = ctx.query.get("msg", [""])[0]
     erreur = ctx.query.get("erreur", [""])[0]
-    return t.page_dossier_detail(ctx.user, d, hist, pieces, commentaires, users, cert, facture, trans, ctx.csrf, msg=msg, erreur=erreur, portee=portee_dossier(ctx, d))
+    signee = ctx.conn.execute(
+        "SELECT id FROM pieces WHERE dossier_id = ? AND categorie = 'demande_signee'", (d["id"],)
+    ).fetchone()
+    return t.page_dossier_detail(ctx.user, d, hist, pieces, commentaires, users, cert, facture, trans, ctx.csrf,
+                                 msg=msg, erreur=erreur, portee=portee_dossier(ctx, d),
+                                 demande_envoyee=d["demande_envoyee_at"], demande_signee=bool(signee))
 
 
 @route("POST", r"/dossiers/(\d+)/statut", roles=["admin", "auditeur", "candidat"])
@@ -404,7 +411,7 @@ def dossier_statut(ctx, did):
     commentaire = ctx.form.get("commentaire", "").strip()
     dispo = transitions_possibles(ctx.user, d)
     if cible not in dispo:
-        redirect(ctx, f"/dossiers/{d['id']}?erreur=Transition non autorisée ({t.esc(d['statut'])} → {t.esc(cible)}).")
+        redirect(ctx, f"/dossiers/{d['id']}?erreur=Transition non autorisée ({t.esc(d['statut'])} -> {t.esc(cible)}).")
         return
     if cible == "refuse" and not commentaire:
         redirect(ctx, f"/dossiers/{d['id']}?erreur=Un motif de refus est obligatoire.")
@@ -481,8 +488,8 @@ def piece_upload(ctx, did):
         redirect(ctx, f"/dossiers/{d['id']}?erreur=Fichier trop volumineux (max 10 Mo).")
         return
     ctx.conn.execute(
-        "INSERT INTO pieces(dossier_id, nom, content_type, taille, contenu, uploader_id, at) VALUES (?,?,?,?,?,?,?)",
-        (d["id"], os.path.basename(nom), ctype, len(payload), payload, ctx.user["id"], db.now()),
+        "INSERT INTO pieces(dossier_id, nom, content_type, taille, contenu, uploader_id, categorie, at) VALUES (?,?,?,?,?,?,?,?)",
+        (d["id"], os.path.basename(nom), ctype, len(payload), payload, ctx.user["id"], ctx.form.get("categorie", "autre"), db.now()),
     )
     db.audit(ctx.conn, ctx.user["id"], "piece_ajoutee", "piece", None, f"{d['numero']} / {nom}")
     ctx.conn.commit()
@@ -931,6 +938,163 @@ def stats(ctx):
         "factures": charts.donut(data_factures),
     }
     return t.page_stats(ctx.user, kpis, charts_html)
+
+
+INFOS_OF_KEYS = ["code_ape", "tva_intracom", "dirigeant", "contact_nom", "contact_fonction",
+                 "contact_tel", "contact_mail", "effectifs_formation", "nb_formateurs"]
+
+
+@route("GET", r"/profil")
+def profil_get(ctx):
+    row = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (ctx.user["id"],)).fetchone()
+    try:
+        infos = json.loads(row["infos_of"]) if row["infos_of"] else {}
+    except Exception:
+        infos = {}
+    msg = ctx.query.get("msg", [""])[0]
+    return t.page_profil(ctx.user, infos, ctx.csrf, msg=msg)
+
+
+@route("POST", r"/profil")
+def profil_post(ctx):
+    u = ctx.user
+    for c in ("organisme", "siret", "adresse", "numero_enregistrement"):
+        if c in ctx.form:
+            ctx.conn.execute(f"UPDATE users SET {c} = ? WHERE id = ?", (ctx.form[c].strip(), u["id"]))
+    row = ctx.conn.execute("SELECT infos_of FROM users WHERE id = ?", (u["id"],)).fetchone()
+    try:
+        infos = json.loads(row["infos_of"]) if row and row["infos_of"] else {}
+    except Exception:
+        infos = {}
+    for k in INFOS_OF_KEYS:
+        if k in ctx.form:
+            infos[k] = ctx.form[k].strip()
+    ctx.conn.execute("UPDATE users SET infos_of = ? WHERE id = ?", (json.dumps(infos, ensure_ascii=False), u["id"]))
+    db.audit(ctx.conn, u["id"], "profil_maj", "user", u["id"], u["email"])
+    ctx.conn.commit()
+    redirect(ctx, "/profil?msg=Profil de l'organisme mis à jour.")
+
+
+@route("GET", r"/dossiers/(\d+)/demande.pdf")
+def demande_pdf_route(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    try:
+        dom_sel = json.loads(d["domaines"]) if d["domaines"] else []
+    except Exception:
+        dom_sel = []
+    try:
+        typ_sel = json.loads(d["types_formation"]) if d["types_formation"] else []
+    except Exception:
+        typ_sel = []
+    dom_all = [(r["code"], r["libelle"]) for r in ctx.conn.execute("SELECT code, libelle FROM domaines ORDER BY rowid").fetchall()]
+    params = {cle: db.get_param(ctx.conn, cle) for cle in ("adresse_lcp", "email_contact", "tel_lcp")}
+    pdf_bytes = pdfgen.demande_pdf(d, candidat, dom_sel, typ_sel, dom_all, params)
+    db.audit(ctx.conn, ctx.user["id"], "demande_pdf", "dossier", d["id"], d["numero"])
+    ctx.conn.commit()
+    respond(ctx, pdf_bytes, ctype="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="demande_certification_{d["numero"]}.pdf"'})
+
+
+@route("POST", r"/dossiers/(\d+)/envoyer-demande", roles=["admin"])
+def envoyer_demande(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    now = db.now()
+    ctx.conn.execute("UPDATE dossiers SET demande_envoyee_at = ?, updated_at = ? WHERE id = ?", (now, now, d["id"]))
+    ctx.conn.execute(
+        "INSERT INTO historique(dossier_id, ancien, nouveau, acteur_id, commentaire, at) VALUES (?,?,?,?,?,?)",
+        (d["id"], d["statut"], d["statut"], ctx.user["id"], "Élément technique de demande de certification envoyé à l'OF (à retourner complété et signé)", now),
+    )
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    db.audit(ctx.conn, ctx.user["id"], "demande_envoyee", "dossier", d["id"], d["numero"])
+    db.notify(ctx.conn, candidat["id"], "demande_envoyee",
+              f"Demande de certification à compléter — {d['numero']}",
+              f"L'élément technique de demande de certification du dossier {d['numero']} vous a été envoyé : complétez-le, signez-le et retournez-le (pièce « demande signée ») pour permettre la revue de recevabilité.",
+              lien=f"/dossiers/{d['id']}", cle=f"demande_env:{d['id']}")
+    db.send_email(ctx.conn, candidat["email"],
+                  f"[LCP] À retourner signé : demande de certification {d['numero']}",
+                  f"Bonjour,\n\nLe document Word original « Élément technique de demande de certification » (V0010) du dossier {d['numero']} est disponible dans votre CRM LCP (dossier {d['numero']} → « Télécharger le document Word pré-rempli »).\n"
+                  f"Complétez-le dans Word, signez-le, puis déposez-le en pièce jointe (catégorie « demande signée »).\n"
+                  f"Adresse de retour : {db.get_param(ctx.conn, 'adresse_lcp')} ou {db.get_param(ctx.conn, 'email_contact')}\n\nLCP — Certification OFDTI",
+                  dossier_id=d["id"])
+    ctx.conn.commit()
+    redirect(ctx, f"/dossiers/{d['id']}?msg=Demande de certification envoyée à l'OF le {now[:10]}.")
+
+
+@route("GET", r"/certificats/(\d+)/document")
+def certificat_document(ctx, cid):
+    cert = ctx.conn.execute("SELECT * FROM certificats WHERE id = ?", (int(cid),)).fetchone()
+    if not cert:
+        return t.page_erreur(ctx.user, "Certificat introuvable.", "Introuvable"), 404
+    d, candidat, dom_sel, typ_sel, dom_all, lieu, signataire = contexte_certificat(ctx, cert)
+    if not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    label_map = {c: l for c, l in dom_all}
+    siret = candidat["siret"] or ""
+    out = os.path.join(tempfile.gettempdir(), f"cert_{cert['id']}_{secrets.token_hex(4)}.docx")
+    docx_fill.fill_certificat(
+        os.path.join(DOCS_DIR, "Modele_certificat_OFDTI_V007.docx"), out,
+        numero=cert["numero"],
+        nom=candidat["organisme"] or candidat["nom"],
+        adresse=candidat["adresse"] or "—",
+        siren=siret[:9] if siret else "—",
+        enregistrement=candidat["numero_enregistrement"] or "—",
+        emis_le=cert["date_delivrance"][:10],
+        prise_effet=cert["date_delivrance"][:10],
+        valable=cert["date_expiration"][:10],
+        edite_le=db.now()[:10],
+        domaines_sel=dom_sel, types_sel=typ_sel, label_map=label_map,
+    )
+    with open(out, "rb") as f:
+        data = f.read()
+    os.remove(out)
+    db.audit(ctx.conn, ctx.user["id"], "certificat_docx", "certificat", cert["id"], cert["numero"])
+    ctx.conn.commit()
+    respond(ctx, data,
+            ctype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="Certificat_OFDTI_{cert["numero"]}.docx"'})
+
+
+@route("GET", r"/dossiers/(\d+)/demande-document")
+def demande_document(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    try:
+        infos = json.loads(candidat["infos_of"]) if candidat["infos_of"] else {}
+    except Exception:
+        infos = {}
+    identity = {
+        "organisme": candidat["organisme"] or candidat["nom"],
+        "code_ape": infos.get("code_ape", ""),
+        "siren": (candidat["siret"] or "")[:9],
+        "tva_intracom": infos.get("tva_intracom", ""),
+        "numero_enregistrement": candidat["numero_enregistrement"] or "",
+        "adresse": candidat["adresse"] or "",
+        "dirigeant": infos.get("dirigeant", ""),
+        "contact_nom": infos.get("contact_nom", ""),
+        "contact_fonction": infos.get("contact_fonction", ""),
+        "contact_tel": infos.get("contact_tel", ""),
+        "contact_mail": infos.get("contact_mail", ""),
+        "effectifs_formation": infos.get("effectifs_formation", ""),
+        "nb_formateurs": infos.get("nb_formateurs", ""),
+        "periode_demande": "",
+    }
+    out = os.path.join(tempfile.gettempdir(), f"demande_{d['id']}_{secrets.token_hex(4)}.docx")
+    docx_fill.fill_demande(os.path.join(DOCS_DIR, "Element_technique_demande_certification_V0010.docx"), out, identity)
+    with open(out, "rb") as f:
+        data = f.read()
+    os.remove(out)
+    db.audit(ctx.conn, ctx.user["id"], "demande_docx", "dossier", d["id"], d["numero"])
+    ctx.conn.commit()
+    respond(ctx, data,
+            ctype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="Element_technique_demande_certification_{d["numero"]}.docx"'})
 
 
 @route("GET", r"/documents")

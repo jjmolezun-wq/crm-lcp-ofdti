@@ -45,6 +45,33 @@ Régénération : lancer l'app, capturer les pages HTML, puis
 - [09 — Administration (utilisateurs)](docs/screenshots/09-admin-utilisateurs.svg)
 - [10 — Tableau de bord candidat](docs/screenshots/10-tableau-de-bord-candidat.svg)
 - [11 — Statistiques (graphiques SVG)](docs/screenshots/11-statistiques.svg)
+- [12 — Nouveau dossier (domaines × types de formation)](docs/screenshots/12-nouveau-dossier.svg)
+- [13 — Documents de référence](docs/screenshots/13-documents.svg)
+
+## Conformité à la procédure de certification OFDTI (V016)
+
+Le workflow du CRM reprend la procédure fournie (`templates/documents/Procedure_certification_OFDTI_V016.docx`) :
+
+- **Cycle de certification : 5 ans (60 mois)** (`duree_certification_mois=60`), certificats `OFDTI-YYYY-NNNN`.
+- Statuts : brouillon → **demande déposée** → **revue de recevabilité** → **recevable / non recevable** →
+  **audit initial** → certifié / non conforme / refusé, puis **surveillance**, **renouvellement**,
+  suspendu / retiré / expiré / abandonné.
+- **Alertes de délais réglementaires** : recevabilité sous 15 jours (`delai_recevabilite_jours`),
+  décision sous 9 mois après recevabilité (`delai_decision_mois`), **abandon automatique après 4 mois**
+  sans pièces complémentaires (`delai_complement_mois`), avec notification et e-mail.
+- **Renouvellement** : dossier auto-créé en brouillon à J-360 (`seuil_renouvellement_jours`), fenêtre
+  48e mois → expiration, conformément à la procédure.
+- **Portée de certification** : 11 domaines DTI (amiante, DPE, électricité, gaz, plomb, termites, termites O-M,
+  audit énergétique — avec/sans mention) × 5 types de formation (FIP, FID, FCP, FCD, FPT), comme la table
+  du modèle de certificat.
+- **Charte graphique** : couleur de marque **#F0980C** (celle du certificat) appliquée à l'interface web,
+  au certificat PDF (bordure et titres) et aux visuels.
+- **Modèle de certificat** : `templates/documents/Modele_certificat_OFDTI_V007.docx` (référence) ; le PDF
+  généré reprend sa structure (attestation, organisme/adresse/SIREN/n° d'enregistrement, table domaines ×
+  formations, arrêtés cités, « Édien à Pessac, par le Responsable de certification » — tous ces éléments sont
+  des paramètres admin) et est **signé électroniquement (RSA-2048)** avec vérification en ligne.
+- **Documents de référence** servis par l'app : page `/documents` (procédure V016, modèle de certificat,
+  mentions légales `certificat_mentions.txt` à remplacer par vos textes officiels).
 
 ## Fonctionnalités du prototype
 

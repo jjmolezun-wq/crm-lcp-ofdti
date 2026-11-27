@@ -22,6 +22,8 @@ DEFAULT_PARAMS = {
     "signataire_certificat": "MOLEZUN Jean-Jacques, Responsable de certification",
     "email_contact": "ofdti@lcp-certification.fr",
     "site_web": "https://www.lcp-certification.fr",
+    "adresse_lcp": "L.C.P Certification — 30, avenue de Canteranne – 33600 PESSAC",
+    "tel_lcp": "05.33.89.39.30",
     "marque_couleur": "F0980C",
 }
 
@@ -289,6 +291,14 @@ def migrate(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "numero_enregistrement" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN numero_enregistrement TEXT")
+    if "infos_of" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN infos_of TEXT")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(dossiers)").fetchall()}
+    if "demande_envoyee_at" not in cols:
+        conn.execute("ALTER TABLE dossiers ADD COLUMN demande_envoyee_at TEXT")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(pieces)").fetchall()}
+    if "categorie" not in cols:
+        conn.execute("ALTER TABLE pieces ADD COLUMN categorie TEXT DEFAULT 'autre'")
 
 
 def seed(conn):
