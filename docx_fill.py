@@ -43,13 +43,17 @@ def _replace_in_paragraph(p, values):
 
 
 def _fill_placeholders(xml, resolver):
-    """resolver(texte_paragraphe) -> liste de valeurs pour les placeholders de ce paragraphe."""
+    """resolver(texte_paragraphe, texte_paragraphe_précédent) -> liste de valeurs pour les placeholders."""
     out = []
+    prev = ""
     for p in _paragraphs(xml):
         if any(ph in p for ph in PLACEHOLDERS):
-            values = resolver(_ptext(p))
+            values = resolver(_ptext(p), prev)
             if values:
                 p = _replace_in_paragraph(p, values)
+        t = _ptext(p)
+        if t.strip() and not any(ph in t for ph in PLACEHOLDERS):
+            prev = t
         out.append(p)
     return "".join(out)
 
@@ -109,21 +113,190 @@ def _rewrite(template_path, out_path, transform):
 
 def fill_certificat(template_path, out_path, *, numero, nom, adresse, siren, enregistrement,
                     emis_le, prise_effet, valable, edite_le, domaines_sel, types_sel, label_map):
-    def resolver(txt):
-        if txt.startswith("N°"):
-            return [f"N° {numero}"]
-        if "Emis le" in txt:
-            return [emis_le, prise_effet, valable]
-        if "Edit" in txt and "Pessac" in txt:
-            return [edite_le]
-        if txt.startswith("Nom"):
-            return [nom]
-        if txt.startswith("Adresse"):
-            return [adresse]
-        if "SIREN" in txt:
-            return [siren]
-        if "enregistrement" in txt:
-            return [enregistrement]
+    def resolver(txt, prev=""):
+        for t in (txt, prev):
+            if t.startswith("N°"):
+                return [f"N° {numero}"]
+            if "Emis le" in t:
+                return [emis_le, prise_effet, valable]
+            if "Edit" in t and "Pessac" in t:
+                return [edite_le]
+            if t.startswith("Nom"):
+                return [nom]
+            if t.startswith("Adresse"):
+                return [adresse]
+            if "SIREN" in t:
+                return [siren]
+            if "enregistrement" in t:
+                return [enregistrement]
+        return []
+
+    def transform(xml):
+        xml = _fill_placeholders(xml, resolver)
+        xml = _check_domaines(xml, domaines_sel, types_sel, label_map)
+        return xml
+
+    _rewrite(template_path, out_path, transform)
+
+
+def fill_generic(template_path, out_path, label_values, check_box_index=None):
+    """Remplit les placeholders dont le paragraphe commence par un des libellés donnés.
+    label_values : liste de (prefix_libellé, valeur). check_box_index : index de la case ☐ à cocher (☒)."""
+    def resolver(txt, prev=""):
+        for prefix, value in label_values:
+            if txt.strip().startswith(prefix) or (any(ph in txt for ph in PLACEHOLDERS) and prev.strip().startswith(prefix)):
+                return [value]
+        return []
+
+    def transform(xml):
+        xml = _fill_placeholders(xml, resolver)
+        if check_box_index is not None:
+            boxes = [m.start() for m in re.finditer(re.escape(BOX), xml)]
+            if len(boxes) > check_box_index:
+                pos = boxes[check_box_index]
+                xml = xml[:pos] + CHECKED + xml[pos + 1:]
+        return xml
+
+    _rewrite(template_path, out_path, transform)
+
+
+def fill_attestation_recevabilite(template_path, out_path, *, contact, numero, organisme, adresse, lieu, date_emission):
+    fill_generic(template_path, out_path, [
+        ("Nom et Prénom", contact),
+        ("Dossier N°", numero),
+        ("Organisme", organisme),
+        ("Adresse", adresse),
+        ("Fait à", lieu),
+        ("Le", date_emission),
+    ])
+
+
+def fill_dossier_candidature(template_path, out_path, *, organisme, numero, contact, prepare_par, renouvellement=False):
+    fill_generic(template_path, out_path, [
+        ("Organisme", organisme),
+        ("Réf Offre", numero),
+        ("A l'attention de", contact),
+        ("Préparé par", prepare_par),
+    ], check_box_index=1 if renouvellement else 0)
+
+
+def fill_avenant_tarifaire(template_path, out_path, *, numero_avenant, numero_dossier, date_signature):
+    fill_generic(template_path, out_path, [
+        ("Avenant n°", numero_avenant),
+        ("Dossier n°", numero_dossier),
+        ("Dossier signé le", date_signature),
+    ])
+
+
+def _esc_xml(s):
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _run(value):
+    return f'<w:r><w:t xml:space="preserve">{_esc_xml(value)}</w:t></w:r>'
+
+
+def _insert_after_text(row, anchor, value):
+    pos = row.find(anchor)
+    if pos < 0:
+        return row
+    end = row.find("</w:t>", pos)
+    if end < 0:
+        return row
+    end += len("</w:t>")
+    return row[:end] + _run(value) + row[end:]
+
+
+def _append_row(row, value):
+    end = row.rfind("</w:p>")
+    if end < 0:
+        return row
+    return row[:end] + _run(" " + value) + row[end:]
+
+
+def fill_fiche_ecart(template_path, out_path, *, reference, domaine="", site="", ref_grille="", libelle="", risque="", auditeur="", date="", gravite="mineur"):
+    def transform(xml):
+        out = []
+        last = 0
+        for m in re.finditer(r"<w:tr\b.*?</w:tr>", xml, re.S):
+            row = m.group(0)
+            txt = _ptext(row)
+            new = row
+            if "Fiche écart N°" in txt:
+                new = _insert_after_text(new, "N°", " " + reference)
+                if gravite == "majeur":
+                    new = _insert_after_text(new, "Ecart Majeur", "").replace(BOX, CHECKED, 0)
+                    # coche la case Majeur : 2e case de la ligne
+                    idx = [mm.start() for mm in re.finditer(re.escape(BOX), new)]
+                    if len(idx) >= 2:
+                        p = idx[1]
+                        new = new[:p] + CHECKED + new[p + 1:]
+                else:
+                    idx = [mm.start() for mm in re.finditer(re.escape(BOX), new)]
+                    if idx:
+                        p = idx[0]
+                        new = new[:p] + CHECKED + new[p + 1:]
+            elif txt.startswith("Domaine") and "Site concerné" in txt:
+                new = _insert_after_text(new, "Domaine", " " + domaine)
+                new = _insert_after_text(new, "Site concerné", " " + site)
+            elif "Référence de la grille" in txt:
+                new = _append_row(new, ref_grille)
+            elif "Libellé de l'Ecart" in txt or "Libellé de l’écart" in txt:
+                new = _append_row(new, libelle)
+            elif "Risque Induit" in txt:
+                new = _append_row(new, risque)
+            elif "Auditeur" in txt and "Date" in txt and any(ph in new for ph in PLACEHOLDERS):
+                new = _insert_after_text(new, "Auditeur", " " + auditeur)
+                new = re.sub("|".join(re.escape(x) for x in PLACEHOLDERS), date, new, count=1)
+            out.append(xml[last:m.start()])
+            out.append(new)
+            last = m.end()
+        out.append(xml[last:])
+        return "".join(out)
+
+    _rewrite(template_path, out_path, transform)
+
+
+def fill_ordre_mission(template_path, out_path, *, numero_om, organisme, adresse, cp, ville, contact, auditeur, date):
+    fill_generic(template_path, out_path, [
+        ("Ordre de Mission N°", numero_om),
+        ("Organisme", organisme),
+        ("Adresse", adresse),
+        ("Cp", cp),
+        ("Ville", ville),
+        ("NOM et Prénom", contact),
+    ])
+    # second passe pour l'auditeur (label générique répété) : on remplit le premier placeholder restant par l'auditeur
+    def resolver2(txt):
+        return []
+    _ = resolver2
+
+
+def fill_rapport_audit(template_path, out_path, *, numero_dossier, numero_certificat):
+    fill_generic(template_path, out_path, [
+        ("Numéro de dossier", numero_dossier),
+        ("Numéro de certificat", numero_certificat or "—"),
+    ])
+
+
+def fill_plan_audit(template_path, out_path, *, date_etab, responsable, organisme, adresse, site, contact, tel,
+                    domaines_sel, types_sel, label_map):
+    def resolver(txt, prev=""):
+        for t in (txt.strip(), prev.strip()):
+            if t.startswith("Date d'établissement") or t.startswith("Date de Mise"):
+                return [date_etab]
+            if t.startswith("Nom et prénom du responsable"):
+                return [responsable]
+            if t.startswith("Nom de l'organisme"):
+                return [organisme]
+            if t.startswith("Adresse du siège"):
+                return [adresse]
+            if t.startswith("Site concerné"):
+                return [site]
+            if t.startswith("Contact Client"):
+                return [contact]
+            if t.startswith("Téléphone"):
+                return [tel]
         return []
 
     def transform(xml):
@@ -147,8 +320,8 @@ def fill_demande(template_path, out_path, identity):
     state = {"i": 0}
     LCP_RESERVE = ("DATE DE RECEPTION", "DATE DE VALIDATION", "PERSONNE AYANT")
 
-    def resolver(txt):
-        if any(m in txt.upper() for m in LCP_RESERVE):
+    def resolver(txt, prev=""):
+        if any(m in txt.upper() for m in LCP_RESERVE) or any(m in prev.upper() for m in LCP_RESERVE):
             return []
         if state["i"] >= len(queue):
             return []

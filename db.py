@@ -13,7 +13,8 @@ DEFAULT_PARAMS = {
     "delai_recevabilite_jours": "15",
     "delai_decision_mois": "9",
     "delai_complement_mois": "4",
-    "montant_frais_euros": "1500.00",
+    "montant_frais_euros": "825.00",
+    "tarif_jour_audit_euros": "1250.00",
     "delai_paiement_jours": "30",
     "seuils_relance_certificat_jours": "[360, 90, 30, 7]",
     "delai_alerte_instruction_jours": "30",
@@ -161,6 +162,21 @@ CREATE TABLE IF NOT EXISTS parametres (
 CREATE TABLE IF NOT EXISTS domaines (
     code TEXT PRIMARY KEY,
     libelle TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ecarts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id),
+    reference TEXT NOT NULL UNIQUE,
+    auteur_id INTEGER NOT NULL REFERENCES users(id),
+    domaine TEXT,
+    site TEXT,
+    ref_grille TEXT,
+    libelle TEXT NOT NULL,
+    risque TEXT,
+    gravite TEXT NOT NULL DEFAULT 'mineur',
+    accord TEXT,
+    statut TEXT NOT NULL DEFAULT 'ouvert',
+    at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS signatures (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

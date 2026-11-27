@@ -397,9 +397,14 @@ def dossier_detail(ctx, did):
     signee = ctx.conn.execute(
         "SELECT id FROM pieces WHERE dossier_id = ? AND categorie = 'demande_signee'", (d["id"],)
     ).fetchone()
+    ecarts = ctx.conn.execute(
+        "SELECT * FROM ecarts WHERE dossier_id = ? ORDER BY at, id", (d["id"],)
+    ).fetchall()
+    domaines = [(r["code"], r["libelle"]) for r in ctx.conn.execute("SELECT code, libelle FROM domaines ORDER BY rowid").fetchall()]
     return t.page_dossier_detail(ctx.user, d, hist, pieces, commentaires, users, cert, facture, trans, ctx.csrf,
                                  msg=msg, erreur=erreur, portee=portee_dossier(ctx, d),
-                                 demande_envoyee=d["demande_envoyee_at"], demande_signee=bool(signee))
+                                 demande_envoyee=d["demande_envoyee_at"], demande_signee=bool(signee),
+                                 ecarts=ecarts, domaines=domaines)
 
 
 @route("POST", r"/dossiers/(\d+)/statut", roles=["admin", "auditeur", "candidat"])
@@ -416,6 +421,20 @@ def dossier_statut(ctx, did):
     if cible == "refuse" and not commentaire:
         redirect(ctx, f"/dossiers/{d['id']}?erreur=Un motif de refus est obligatoire.")
         return
+    if cible == "recevable":
+        signee = ctx.conn.execute(
+            "SELECT id FROM pieces WHERE dossier_id = ? AND categorie = 'demande_signee'", (d["id"],)
+        ).fetchone()
+        if not signee:
+            redirect(ctx, f"/dossiers/{d['id']}?erreur=La demande de certification complétée et signée (pièce « demande signée ») doit être retournée avant de prononcer la recevabilité (procédure V016, revue de la demande).")
+            return
+    if cible == "en_audit" and d["statut"] == "recevable":
+        contrat = ctx.conn.execute(
+            "SELECT id FROM pieces WHERE dossier_id = ? AND categorie = 'dossier_candidature'", (d["id"],)
+        ).fetchone()
+        if not contrat:
+            redirect(ctx, f"/dossiers/{d['id']}?erreur=Le dossier de candidature signé (pièce « dossier de candidature signé ») et le règlement des frais de recevabilité sont requis avant de lancer l'audit (procédure V016).")
+            return
     now = db.now()
     updates = {"statut": cible, "updated_at": now}
     if cible == "depose":
@@ -459,6 +478,20 @@ def dossier_statut(ctx, did):
         db.send_email(ctx.conn, candidat["email"], f"[LCP] Décision — dossier {d['numero']} refusé",
                       f"Bonjour,\n\nVotre dossier {d['numero']} a été refusé.\nMotif : {commentaire}\n\nLCP — Certification OFDTI",
                       dossier_id=d["id"])
+    elif cible == "recevable":
+        db.notify(ctx.conn, candidat["id"], "recevable", f"Demande recevable — {d['numero']}",
+                  f"Votre demande de certification {d['numero']} est recevable. L'attestation de recevabilité (valable 9 mois) est disponible sur votre dossier. Le dossier de candidature vous sera transmis pour signature.",
+                  lien=f"/dossiers/{d['id']}", cle=f"recevable:{d['id']}")
+        db.send_email(ctx.conn, candidat["email"], f"[LCP] Attestation de recevabilité — dossier {d['numero']}",
+                      f"Bonjour,\n\nVotre demande de certification OFDTI {d['numero']} est recevable.\nL'attestation de recevabilité (valable 9 mois à compter de son émission) est disponible dans votre CRM LCP.\nVous pouvez désormais recevoir des inscriptions en vue de la première session de formation.\n\nLCP — Certification OFDTI",
+                      dossier_id=d["id"])
+    elif cible == "en_audit":
+        db.notify_role(ctx.conn, "auditeur", "audit_planifie", f"Audit à réaliser — {d['numero']}",
+                       f"Le dossier {d['numero']} ({candidat['organisme'] or candidat['nom']}) entre en audit. Ordre de mission et plan d'audit V006 disponibles sur le dossier.",
+                       lien=f"/dossiers/{d['id']}", cle=f"audit:{d['id']}")
+        db.notify(ctx.conn, candidat["id"], "audit_planifie", f"Votre audit est planifié — {d['numero']}",
+                  f"L'audit de certification de votre dossier {d['numero']} est en préparation (plan d'audit et ordre de mission côté LCP).",
+                  lien=f"/dossiers/{d['id']}", cle=f"audit_own:{d['id']}")
     elif cible in ("suspendu", "retire"):
         ctx.conn.execute("UPDATE certificats SET statut = ? WHERE dossier_id = ?", (cible, d["id"]))
         db.notify(ctx.conn, candidat["id"], "cert_statut", f"Certificat {cible}",
@@ -893,6 +926,10 @@ def rapport_audit_pdf(ctx, did):
         "SELECT * FROM commentaires WHERE dossier_id = ? AND interne = 1 ORDER BY at, id", (d["id"],)
     ).fetchall()
     lignes = [(users.get(c["auteur_id"], {}).get("nom", "?"), c["at"], c["contenu"]) for c in coms]
+    ecarts = ctx.conn.execute("SELECT * FROM ecarts WHERE dossier_id = ? ORDER BY at, id", (d["id"],)).fetchall()
+    for e in ecarts:
+        lignes.append((users.get(e["auteur_id"], {}).get("nom", "?"), e["at"],
+                       f"ÉCART {e['reference']} [{e['gravite'].upper()}] {e['libelle']} (risque : {e['risque'] or '—'} ; statut : {e['statut']})"))
     pdf_bytes = pdfgen.build_pdf([pdfgen.page_rapport_audit(d, candidat, lignes)])
     db.audit(ctx.conn, ctx.user["id"], "rapport_audit_pdf", "dossier", d["id"], d["numero"])
     ctx.conn.commit()
@@ -1095,6 +1132,220 @@ def demande_document(ctx, did):
     respond(ctx, data,
             ctype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             headers={"Content-Disposition": f'attachment; filename="Element_technique_demande_certification_{d["numero"]}.docx"'})
+
+
+def _identite_of(ctx, candidat):
+    try:
+        infos = json.loads(candidat["infos_of"]) if candidat["infos_of"] else {}
+    except Exception:
+        infos = {}
+    return infos
+
+
+def _docx_reponse(ctx, out_path, filename, audit_action):
+    with open(out_path, "rb") as f:
+        data = f.read()
+    os.remove(out_path)
+    db.audit(ctx.conn, ctx.user["id"], audit_action, "dossier", None, filename)
+    ctx.conn.commit()
+    respond(ctx, data, ctype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@route("GET", r"/dossiers/(\d+)/attestation-recevabilite")
+def attestation_recevabilite(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    infos = _identite_of(ctx, candidat)
+    lieu = db.get_param(ctx.conn, "lieu_edition_certificat", "Pessac")
+    out = os.path.join(tempfile.gettempdir(), f"recev_{d['id']}_{secrets.token_hex(4)}.docx")
+    docx_fill.fill_attestation_recevabilite(
+        os.path.join(DOCS_DIR, "Attestation_recevabilite_OFDTI_V004.docx"), out,
+        contact=infos.get("contact_nom") or candidat["nom"], numero=d["numero"],
+        organisme=candidat["organisme"] or candidat["nom"], adresse=candidat["adresse"] or "—",
+        lieu=lieu, date_emission=db.now()[:10])
+    _docx_reponse(ctx, out, f"Attestation_recevabilite_{d['numero']}.docx", "attestation_recevabilite")
+
+
+@route("GET", r"/dossiers/(\d+)/dossier-candidature")
+def dossier_candidature_doc(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    infos = _identite_of(ctx, candidat)
+    out = os.path.join(tempfile.gettempdir(), f"cand_{d['id']}_{secrets.token_hex(4)}.docx")
+    docx_fill.fill_dossier_candidature(
+        os.path.join(DOCS_DIR, "Dossier_candidature_OFDTI_V015.docx"), out,
+        organisme=candidat["organisme"] or candidat["nom"], numero=d["numero"],
+        contact=infos.get("contact_nom") or candidat["nom"], prepare_par="LCP Certification",
+        renouvellement=bool(d["renouvellement_de"]))
+    _docx_reponse(ctx, out, f"Dossier_candidature_{d['numero']}.docx", "dossier_candidature_docx")
+
+
+@route("GET", r"/dossiers/(\d+)/avenant-tarifaire")
+def avenant_tarifaire_doc(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    out = os.path.join(tempfile.gettempdir(), f"av_{d['id']}_{secrets.token_hex(4)}.docx")
+    docx_fill.fill_avenant_tarifaire(
+        os.path.join(DOCS_DIR, "Avenant_tarifaire_V001.docx"), out,
+        numero_avenant=f"AV-{d['numero']}", numero_dossier=d["numero"], date_signature=db.now()[:10])
+    _docx_reponse(ctx, out, f"Avenant_tarifaire_{d['numero']}.docx", "avenant_tarifaire_docx")
+
+
+@route("GET", r"/dossiers/(\d+)/plan-audit", roles=["admin", "auditeur"])
+def plan_audit_doc(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    infos = _identite_of(ctx, candidat)
+    try:
+        dom_sel = json.loads(d["domaines"]) if d["domaines"] else []
+    except Exception:
+        dom_sel = []
+    try:
+        typ_sel = json.loads(d["types_formation"]) if d["types_formation"] else []
+    except Exception:
+        typ_sel = []
+    dom_all = [(r["code"], r["libelle"]) for r in ctx.conn.execute("SELECT code, libelle FROM domaines ORDER BY rowid").fetchall()]
+    label_map = {c: l for c, l in dom_all}
+    out = os.path.join(tempfile.gettempdir(), f"plan_{d['id']}_{secrets.token_hex(4)}.docx")
+    docx_fill.fill_plan_audit(
+        os.path.join(DOCS_DIR, "Plan_audit_certification_OFDTI_V006.docx"), out,
+        date_etab=db.now()[:10], responsable=ctx.user["nom"],
+        organisme=candidat["organisme"] or candidat["nom"], adresse=candidat["adresse"] or "—",
+        site="Siège", contact=infos.get("contact_nom") or candidat["nom"], tel=infos.get("contact_tel") or "—",
+        domaines_sel=dom_sel, types_sel=typ_sel, label_map=label_map)
+    _docx_reponse(ctx, out, f"Plan_audit_{d['numero']}.docx", "plan_audit_docx")
+
+
+@route("POST", r"/dossiers/(\d+)/envoyer-dossier-candidature", roles=["admin"])
+def envoyer_dossier_candidature(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    now = db.now()
+    ctx.conn.execute("UPDATE dossiers SET updated_at = ? WHERE id = ?", (now, d["id"]))
+    ctx.conn.execute(
+        "INSERT INTO historique(dossier_id, ancien, nouveau, acteur_id, commentaire, at) VALUES (?,?,?,?,?,?)",
+        (d["id"], d["statut"], d["statut"], ctx.user["id"],
+         "Dossier de candidature (contrat) + avenant tarifaire envoyés à l'OF pour signature et règlement", now),
+    )
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    db.audit(ctx.conn, ctx.user["id"], "dossier_candidature_envoye", "dossier", d["id"], d["numero"])
+    db.notify(ctx.conn, candidat["id"], "dossier_candidature_envoye",
+              f"Dossier de candidature à signer — {d['numero']}",
+              f"Le dossier de candidature (contrat) du dossier {d['numero']} vous a été envoyé avec l'avenant tarifaire : signez et retournez-le (pièce « dossier de candidature signé ») avec le règlement des frais de recevabilité.",
+              lien=f"/dossiers/{d['id']}", cle=f"cand_env:{d['id']}")
+    db.send_email(ctx.conn, candidat["email"], f"[LCP] À signer : dossier de candidature {d['numero']}",
+                  f"Bonjour,\n\nLe dossier de candidature (contrat) et l'avenant tarifaire du dossier {d['numero']} sont disponibles dans votre CRM LCP.\nSignez, retournez-les (pièce « dossier de candidature signé ») et réglez les frais de recevabilité pour lancer l'audit.\n\nLCP — Certification OFDTI",
+                  dossier_id=d["id"])
+    ctx.conn.commit()
+    redirect(ctx, f"/dossiers/{d['id']}?msg=Dossier de candidature + avenant tarifaire envoyés le {now[:10]}.")
+
+
+@route("POST", r"/dossiers/(\d+)/ecarts", roles=["admin", "auditeur"])
+def ecart_creer(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    libelle = ctx.form.get("libelle", "").strip()
+    if not libelle:
+        redirect(ctx, f"/dossiers/{d['id']}?erreur=Libellé de l'écart obligatoire.")
+        return
+    ref = db.next_numero(ctx.conn, "EC", "ecarts", "reference")
+    ctx.conn.execute(
+        "INSERT INTO ecarts(dossier_id, reference, auteur_id, domaine, site, ref_grille, libelle, risque, gravite, accord, statut, at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (d["id"], ref, ctx.user["id"], ctx.form.get("domaine", ""), ctx.form.get("site", "Siège"),
+         ctx.form.get("ref_grille", ""), libelle, ctx.form.get("risque", ""),
+         ctx.form.get("gravite", "mineur"), ctx.form.get("accord") or None, "ouvert", db.now()),
+    )
+    db.audit(ctx.conn, ctx.user["id"], "ecart_cree", "ecart", None, f"{ref} / {d['numero']}")
+    db.notify_role(ctx.conn, "admin", "ecart", f"Écart {ref} constaté — {d['numero']}",
+                   f"{ctx.user['nom']} : [{e_grav(ctx.form)}] {libelle[:120]}", lien=f"/dossiers/{d['id']}",
+                   cle=f"ecart:{ref}")
+    ctx.conn.commit()
+    redirect(ctx, f"/dossiers/{d['id']}?msg=Écart {ref} enregistré.")
+
+
+def e_grav(form):
+    return form.get("gravite", "mineur").upper()
+
+
+@route("POST", r"/ecarts/(\d+)/statut", roles=["admin", "auditeur"])
+def ecart_statut(ctx, eid):
+    e = ctx.conn.execute("SELECT * FROM ecarts WHERE id = ?", (int(eid),)).fetchone()
+    if not e:
+        return t.page_erreur(ctx.user, "Écart introuvable.", "Introuvable"), 404
+    d = get_dossier(ctx, e["dossier_id"])
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    nouveau = ctx.form.get("statut", "ouvert")
+    if nouveau not in ("ouvert", "traite", "clos"):
+        nouveau = "ouvert"
+    ctx.conn.execute("UPDATE ecarts SET statut = ? WHERE id = ?", (nouveau, e["id"]))
+    db.audit(ctx.conn, ctx.user["id"], f"ecart_{nouveau}", "ecart", e["id"], e["reference"])
+    ctx.conn.commit()
+    redirect(ctx, f"/dossiers/{d['id']}?msg=Écart {e['reference']} → {nouveau}.")
+
+
+@route("GET", r"/ecarts/(\d+)/fiche")
+def ecart_fiche(ctx, eid):
+    e = ctx.conn.execute("SELECT * FROM ecarts WHERE id = ?", (int(eid),)).fetchone()
+    if not e:
+        return t.page_erreur(ctx.user, "Écart introuvable.", "Introuvable"), 404
+    d = get_dossier(ctx, e["dossier_id"])
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    auteur = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (e["auteur_id"],)).fetchone()
+    out = os.path.join(tempfile.gettempdir(), f"ecart_{e['id']}_{secrets.token_hex(4)}.docx")
+    docx_fill.fill_fiche_ecart(
+        os.path.join(DOCS_DIR, "Fiche_ecart_audit_V004.docx"), out,
+        reference=e["reference"], domaine=e["domaine"] or "—", site=e["site"] or "Siège", ref_grille=e["ref_grille"] or "—",
+        libelle=e["libelle"], risque=e["risque"] or "—", auditeur=auteur["nom"], date=e["at"][:10],
+        gravite=e["gravite"])
+    _docx_reponse(ctx, out, f"Fiche_ecart_{e['reference']}.docx", "fiche_ecart")
+
+
+@route("GET", r"/dossiers/(\d+)/ordre-mission", roles=["admin", "auditeur"])
+def ordre_mission(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    infos = _identite_of(ctx, candidat)
+    adresse = candidat["adresse"] or ""
+    cp = ""
+    ville = ""
+    m = re.search(r"(\d{5})\s+(.*)", adresse)
+    if m:
+        cp, ville = m.group(1), m.group(2)
+    om = db.next_numero(ctx.conn, "OM", "dossiers", "numero") if False else f"OM-{d['numero']}"
+    out = os.path.join(tempfile.gettempdir(), f"om_{d['id']}_{secrets.token_hex(4)}.docx")
+    docx_fill.fill_ordre_mission(
+        os.path.join(DOCS_DIR, "Ordre_mission_auditeurs_V003.docx"), out,
+        numero_om=om, organisme=candidat["organisme"] or candidat["nom"], adresse=adresse, cp=cp, ville=ville,
+        contact=infos.get("contact_nom") or candidat["nom"], auditeur=ctx.user["nom"], date=db.now()[:10])
+    _docx_reponse(ctx, out, f"Ordre_mission_{d['numero']}.docx", "ordre_mission")
+
+
+@route("GET", r"/dossiers/(\d+)/rapport-audit-document", roles=["admin", "auditeur"])
+def rapport_audit_document(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    cert = ctx.conn.execute("SELECT numero FROM certificats WHERE dossier_id = ?", (d["id"],)).fetchone()
+    out = os.path.join(tempfile.gettempdir(), f"rapport_{d['id']}_{secrets.token_hex(4)}.docx")
+    docx_fill.fill_rapport_audit(
+        os.path.join(DOCS_DIR, "Rapport_audit_OFDTI_V009.docx"), out,
+        numero_dossier=d["numero"], numero_certificat=cert["numero"] if cert else None)
+    _docx_reponse(ctx, out, f"Rapport_audit_{d['numero']}.docx", "rapport_audit_docx")
 
 
 @route("GET", r"/documents")

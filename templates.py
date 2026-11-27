@@ -211,7 +211,7 @@ def page_dossier_new(user, csrf, domaines, types, error=None):
     return layout(user, "Nouveau dossier", body)
 
 
-def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, facture, trans, csrf, msg=None, erreur=None, portee="", demande_envoyee=None, demande_signee=False):
+def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, facture, trans, csrf, msg=None, erreur=None, portee="", demande_envoyee=None, demande_signee=False, ecarts=None, domaines=None):
     flash = f'<div class="flash">{esc(msg)}</div>' if msg else ""
     err = f'<div class="erreur">{esc(erreur)}</div>' if erreur else ""
     hist_rows = "".join(
@@ -252,15 +252,60 @@ def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, factur
 <tr><th>Statut</th><td>{badge_statut("ok" if cert["statut"] == "valide" else "muted")} {esc(cert["statut"])}</td></tr>
 <tr><th>Documents</th><td><a class="btn small" href="/certificats/{cert["id"]}/document">Certificat Word (modèle officiel V007 rempli)</a> <a class="btn small" href="/certificats/{cert["id"]}/pdf">PDF signé</a> <a class="btn small secondary" href="/certificats/{cert["id"]}/print" target="_blank">Aperçu</a> <a class="btn small secondary" href="/certificats/{cert["id"]}/verify" target="_blank">Vérifier la signature</a>{renouveler}</td></tr></table></div>"""
     envoyer_btn = ""
+    envoyer_cand_btn = ""
     if user["role"] == "admin":
         envoyer_btn = f'<form method="post" action="/dossiers/{d["id"]}/envoyer-demande" style="display:inline">{hidden_csrf(csrf)}<button class="btn small">Envoyer la demande à l\'OF</button></form>'
+        envoyer_cand_btn = f'<form method="post" action="/dossiers/{d["id"]}/envoyer-dossier-candidature" style="display:inline">{hidden_csrf(csrf)}<button class="btn small">Envoyer le dossier de candidature + avenant</button></form>'
+    plan_btn = f'<a class="btn small secondary" href="/dossiers/{d["id"]}/plan-audit">Plan d\'audit V006 (Word, tablette auditeur)</a>' if user["role"] in ("admin", "auditeur") else ""
     demande_html = f"""
 <div class="card"><h2>Demande de certification — Élément technique (V0010)</h2>
 <table>
 <tr><th>Document à retourner signé</th><td><a class="btn small" href="/dossiers/{d["id"]}/demande-document">Télécharger le document Word pré-rempli (V0010)</a> <a class="btn small secondary" href="/dossiers/{d["id"]}/demande.pdf">Aperçu PDF pré-rempli</a></td></tr>
 <tr><th>Envoi à l\'OF</th><td>{"envoyée le " + fmt_date(demande_envoyee) if demande_envoyee else "non envoyée"} {envoyer_btn}</td></tr>
 <tr><th>Retour complété et signé</th><td>{"<span class=\"badge ok\">reçu</span>" if demande_signee else "<span class=\"badge warn\">en attente</span> (pièce « demande signée » requise avant recevabilité)"}</td></tr>
+</table></div>
+<div class="card"><h2>Documents contractuels & audit</h2>
+<table>
+<tr><th>Attestation de recevabilité (V004)</th><td><a class="btn small secondary" href="/dossiers/{d["id"]}/attestation-recevabilite">Télécharger (Word rempli)</a> — valable 9 mois</td></tr>
+<tr><th>Dossier de candidature (contrat, V015)</th><td><a class="btn small secondary" href="/dossiers/{d["id"]}/dossier-candidature">Télécharger (Word pré-rempli)</a> {envoyer_cand_btn}</td></tr>
+<tr><th>Avenant tarifaire (V001)</th><td><a class="btn small secondary" href="/dossiers/{d["id"]}/avenant-tarifaire">Télécharger (Word)</a> — jour d'audit 1 250 € HT, instruction/recevabilité 825 € HT</td></tr>
+<tr><th>Plan d'audit</th><td>{plan_btn}</td></tr>
 </table></div>"""
+    ecarts_html = ""
+    if user["role"] in ("admin", "auditeur"):
+        dom_options = "".join(f'<option value="{esc(c)}">{esc(l)}</option>' for c, l in (domaines or []))
+        rows = "".join(
+            f'<tr><td><b>{esc(e["reference"])}</b></td><td>{esc(e["gravite"])}</td><td>{esc(e["libelle"])}</td>'
+            f'<td>{esc(e["risque"] or "")}</td><td>{esc(e["statut"])}</td>'
+            f'<td><a class="btn small secondary" href="/ecarts/{e["id"]}/fiche">Fiche V004 (Word)</a> '
+            f'<form method="post" action="/ecarts/{e["id"]}/statut" style="display:inline">{hidden_csrf(csrf)}'
+            f'<select name="statut" style="width:auto"><option>ouvert</option><option>traite</option><option>clos</option></select>'
+            f'<button class="btn small secondary">OK</button></form></td></tr>'
+            for e in (ecarts or []))
+        ecarts_html = f"""
+<div class="card"><h2>Audit — écarts & documents</h2>
+<p class="row">
+ <a class="btn small" href="/dossiers/{d["id"]}/ordre-mission">Ordre de mission auditeur (V003, Word)</a>
+ <a class="btn small secondary" href="/dossiers/{d["id"]}/rapport-audit-document">Rapport d'audit (V009, Word)</a>
+ <a class="btn small secondary" href="/dossiers/{d["id"]}/rapport-audit.pdf">Rapport d'audit (PDF, avec écarts)</a>
+ <a class="btn small secondary" href="/documents/Reunion_cloture_intermediaire_V003.docx">Réunion clôture interm. (V003)</a>
+ <a class="btn small secondary" href="/documents/Reunion_cloture_finale_V001.docx">Réunion clôture finale (V001)</a>
+ <a class="btn small secondary" href="/documents/Revue_audit_certification_OFDTI_V002.xlsx">Revue d'audit (Excel V002)</a>
+</p>
+<h2>Fiches d'écart</h2>
+<table><tr><th>Référence</th><th>Gravité</th><th>Libellé</th><th>Risque</th><th>Statut</th><th>Actions</th></tr>{rows}</table>
+{"<p class='muted'>Aucun écart.</p>" if not rows else ""}
+<h2>Constater un écart (formulaire tablette)</h2>
+<form method="post" action="/dossiers/{d["id"]}/ecarts" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+{hidden_csrf(csrf)}
+<div><label>Domaine</label><select name="domaine">{dom_options}</select></div>
+<div><label>Site</label><input type="text" name="site" value="Siège"></div>
+<div><label>Référence grille d'audit</label><input type="text" name="ref_grille" placeholder="ex : 4.2"></div>
+<div><label>Libellé de l'écart</label><input type="text" name="libelle" required></div>
+<div><label>Risque induit</label><input type="text" name="risque"></div>
+<div><label>Gravité</label><select name="gravite"><option value="mineur">mineur</option><option value="majeur">majeur</option></select></div>
+<div style="align-self:end"><button class="btn small" type="submit">Enregistrer l'écart</button></div>
+</form></div>"""
     fac_html = ""
     if facture:
         payer = f'<form method="post" action="/factures/{facture["id"]}/payer" style="display:inline">{hidden_csrf(csrf)}<button class="btn small">Marquer payée</button></form>' if user["role"] == "admin" and facture["statut"] != "payee" else ""
@@ -286,6 +331,7 @@ def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, factur
 </table></div>
 {action_html}
 {demande_html}
+{ecarts_html}
 {cert_html}{fac_html}
 <div class="card"><h2>Pièces justificatives</h2>
 <table><tr><th>Fichier</th><th>Catégorie</th><th>Taille</th><th>Déposé par</th><th>Date</th><th></th></tr>{pieces_rows}</table>

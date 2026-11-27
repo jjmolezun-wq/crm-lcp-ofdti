@@ -47,6 +47,22 @@ Régénération : lancer l'app, capturer les pages HTML, puis
 - [11 — Statistiques (graphiques SVG)](docs/screenshots/11-statistiques.svg)
 - [12 — Nouveau dossier (domaines × types de formation)](docs/screenshots/12-nouveau-dossier.svg)
 - [13 — Documents de référence](docs/screenshots/13-documents.svg)
+- [14 — Profil de l'organisme de formation](docs/screenshots/14-profil-organisme.svg)
+
+## Documents officiels envoyés à l'OF (fichiers originaux éditables)
+
+Les documents transmis aux organismes de formation sont **vos fichiers Word originaux** (`templates/documents/`),
+remplis programmatiquement (`docx_fill.py`) — jamais des copies approchées :
+
+- **Élément technique de demande de certification V0010** : pré-rempli avec l'identité de l'OF
+  (profil `/profil`), à compléter et signer par l'OF. Téléchargement : `/dossiers/{id}/demande-document` (.docx)
+  + aperçu PDF `/dossiers/{id}/demande.pdf`. Bouton admin « Envoyer la demande à l'OF » (notification + e-mail,
+  envoi tracé dans `dossiers.demande_envoyee_at`). Le retour signé se dépose en pièce jointe de catégorie
+  « demande signée » et **bloque la recevabilité** tant qu'il n'est pas reçu (procédure V016).
+- **Certificat OFDTI V007** : rempli à partir du dossier (n°, organisme, SIREN, n° d'enregistrement, dates,
+  et cases ☒ cochées dans le tableau domaines × types de formation selon la portée certifiée).
+  Téléchargement : `/certificats/{id}/document` (.docx original rempli) + `/certificats/{id}/pdf` (PDF signé RSA-2048).
+- Pièces justificatives classées par catégorie (demande signée, K-bis, Qualiopi, capacités, moyens, facture…).
 
 ## Conformité à la procédure de certification OFDTI (V016)
 

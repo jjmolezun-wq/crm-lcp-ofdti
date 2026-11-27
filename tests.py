@@ -1,3 +1,4 @@
+import io
 import os
 import re
 import subprocess
@@ -7,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import http.cookiejar
+import zipfile
 
 BASE = "http://127.0.0.1:8765"
 DB = "/tmp/test_crm_lcp.db"
@@ -118,8 +120,30 @@ def main():
         csrf_cand = csrf_of(get(cand, f"/dossiers/{did}").read().decode("utf-8"))
         post_multipart(cand, f"/dossiers/{did}/pieces", [("csrf", csrf_cand), ("categorie", "demande_signee")], "demande_signee.pdf", b"%PDF-1.4 signe")
         post(admin, f"/dossiers/{did}/statut", {"csrf": csrf, "statut": "recevable", "commentaire": "demande signée reçue"})
+        r = post(admin, f"/dossiers/{did}/statut", {"csrf": csrf, "statut": "en_audit", "commentaire": "test sans contrat signé"})
+        page = r.read().decode("utf-8")
+        check("audit bloqué sans dossier de candidature signé", "candidature signé" in page or "contrat" in page)
+        post_multipart(cand, f"/dossiers/{did}/pieces", [("csrf", csrf_cand), ("categorie", "dossier_candidature")], "dossier_candidature_signe.pdf", b"%PDF-1.4 contrat signe")
         for statut in ("en_audit", "certifie"):
             post(admin, f"/dossiers/{did}/statut", {"csrf": csrf, "statut": statut, "commentaire": f"vers {statut}"})
+        post(admin, f"/dossiers/{did}/ecarts", {"csrf": csrf, "domaine": "dpe_sans", "site": "Siège", "ref_grille": "4.2",
+                                               "libelle": "Procédure d'évaluation non documentée", "risque": "Non-conformité récurrente", "gravite": "majeur"})
+        page = get(admin, f"/dossiers/{did}").read().decode("utf-8")
+        check("écart enregistré et visible", "EC-" in page and "valuation non document" in page,
+              detail=f"EC-={'EC-' in page} libelle={'valuation non document' in page} len={len(page)}")
+        mec = re.search(r"/ecarts/(\d+)/fiche", page)
+        if mec:
+            fb = get(admin, f"/ecarts/{mec.group(1)}/fiche").read()
+            fx = zipfile.ZipFile(io.BytesIO(fb)).read("word/document.xml").decode("utf-8")
+            check("fiche d'écart V004 (Word original) remplie", "EC-" in fx and "valuation non document" in fx and fx.count("\u2612") >= 1)
+        else:
+            check("fiche d'écart V004 (Word original) remplie", False, "lien fiche introuvable")
+        om = get(admin, f"/dossiers/{did}/ordre-mission").read()
+        omx = zipfile.ZipFile(io.BytesIO(om)).read("word/document.xml").decode("utf-8")
+        check("ordre de mission V003 rempli", numero in omx and "Société Exemple" in omx)
+        rap = get(admin, f"/dossiers/{did}/rapport-audit-document").read()
+        rapx = zipfile.ZipFile(io.BytesIO(rap)).read("word/document.xml").decode("utf-8")
+        check("rapport d'audit V009 (Word) rempli", numero in rapx)
         page = get(admin, f"/dossiers/{did}").read().decode("utf-8")
         check("demande signée reçue affichée", "reçu" in page)
         page = get(admin, f"/dossiers/{did}").read().decode("utf-8")
@@ -170,6 +194,15 @@ def main():
         zx2 = zf2.ZipFile(_io2.BytesIO(demb))
         demxml = zx2.read("word/document.xml").decode("utf-8")
         check("demande Word V0010 pré-remplie (identité OF)", "Société Exemple" in demxml and "OFDTI" in demxml)
+        for route in ("attestation-recevabilite", "dossier-candidature", "avenant-tarifaire", "plan-audit"):
+            rb = get(admin if route == "plan-audit" else cand, f"/dossiers/{did}/{route}").read()
+            zx = zipfile.ZipFile(io.BytesIO(rb))
+            dx = zx.read("word/document.xml").decode("utf-8")
+            attendu = numero if route != "plan-audit" else "Société Exemple"
+            check(f"document Word original rempli : {route}", attendu in dx)
+        planb = get(admin, f"/dossiers/{did}/plan-audit").read()
+        planxml = zipfile.ZipFile(io.BytesIO(planb)).read("word/document.xml").decode("utf-8")
+        check("plan d'audit V006 : cases cochées = portée (4)", planxml.count("\u2612") == 4, str(planxml.count("\u2612")))
         post(cand, "/profil", {"csrf": csrf_cand, "organisme": "Société Exemple SARL", "siret": "12345678900012",
                                "numero_enregistrement": "11-33-000000-01", "adresse": "10 avenue des Services, 69001 Lyon",
                                "code_ape": "8559A", "dirigeant": "Jean Dupont"})
