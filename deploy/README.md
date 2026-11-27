@@ -1,6 +1,6 @@
 # Déploiement en production (HTTPS)
 
-**Procédure guidée Infomaniak Public Cloud (VPS Suisse, domaine `lcpofdti.lcp-certification.fr`,
+**Procédure guidée Infomaniak Public Cloud (VPS Suisse, domaine `lcp-certificationofdti.fr`,
 SMTP Infomaniak, HTTPS auto) : voir [INFOMANIAK.md](INFOMANIAK.md).**
 
 Le prototype tourne en HTTP local. Pour la production derrière HTTPS :
