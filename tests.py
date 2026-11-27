@@ -64,6 +64,13 @@ def login(op, email, password):
 def main():
     if os.path.exists(DB):
         os.remove(DB)
+    gdb = "/tmp/prodguard.db"
+    if os.path.exists(gdb):
+        os.remove(gdb)
+    envg = dict(os.environ, CRM_LCP_PROD="1", CRM_LCP_DB=gdb)
+    p = subprocess.run([sys.executable, "/workspace/lcp-crm/app.py", "--reset"], env=envg,
+                       capture_output=True, text=True, timeout=30)
+    check("garde-fou prod : --reset interdit si CRM_LCP_PROD=1", p.returncode == 2 and not os.path.exists(gdb))
     env = dict(os.environ, PORT="8765", CRM_LCP_DB=DB, PYTHONPATH="/workspace/lcp-crm")
     proc = subprocess.Popen([sys.executable, "/workspace/lcp-crm/app.py", "--reset"], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

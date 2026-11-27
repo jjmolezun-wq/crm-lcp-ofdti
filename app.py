@@ -1452,6 +1452,9 @@ def main():
     port = int(os.environ.get("PORT", "8000"))
     host = os.environ.get("HOST", "127.0.0.1")
     reset = "--reset" in sys.argv
+    if reset and os.environ.get("CRM_LCP_PROD") == "1":
+        print("ERREUR : --reset est interdit en production (CRM_LCP_PROD=1). Restaurez une sauvegarde si besoin.")
+        sys.exit(2)
     db.init_db(reset=reset)
     conn0 = db.connect()
     automations.run_automations(conn0)

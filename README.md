@@ -48,6 +48,16 @@ Régénération : lancer l'app, capturer les pages HTML, puis
 - [12 — Nouveau dossier (domaines × types de formation)](docs/screenshots/12-nouveau-dossier.svg)
 - [13 — Documents de référence](docs/screenshots/13-documents.svg)
 - [14 — Profil de l'organisme de formation](docs/screenshots/14-profil-organisme.svg)
+- [15 — Phase audit : écarts constatés (vue auditeur)](docs/screenshots/15-audit-ecarts.svg)
+
+## Phase audit (documents V003/V004/V009/V002 + plan V006)
+
+- **Plan d'audit V006** : `/dossiers/{id}/plan-audit` → Word original pré-rempli (identité OF, responsable d'audit, domaines×types cochés) — utilisable tel quel sur la tablette de l'auditeur.
+- **Ordre de mission auditeurs V003** : `/dossiers/{id}/ordre-mission` (Word rempli).
+- **Fiches d'écart V004** : l'auditeur constate les écarts depuis le CRM (formulaire tablette sur le dossier) ; chaque écart a sa fiche Word remplie `/ecarts/{id}/fiche` (référence EC-YYYY-NNNN, gravité cochée ☒, statut ouvert/traité/clos).
+- **Rapport d'audit V009** : `/dossiers/{id}/rapport-audit-document` (Word rempli) + `/rapport-audit.pdf` (PDF incluant la liste des écarts).
+- **Revue d'audit (Excel V002)**, **réunions de clôture** (V003 intermédiaire, V001 finale) : servis tels quels dans `/documents` et liés depuis le dossier.
+- À la planification de l'audit, les auditeurs sont notifiés automatiquement (ordre de mission + plan disponibles).
 
 ## Documents officiels envoyés à l'OF (fichiers originaux éditables)
 
@@ -126,8 +136,12 @@ Le workflow du CRM reprend la procédure fournie (`templates/documents/Procedure
 - **Tableau de bord avancé** : page `/stats` (admin/auditeur) — KPI (délai moyen dépôt→décision, taux de
   certification, montants en retard, certificats actifs/expirant), graphiques SVG (dossiers par statut,
   par mois, factures par statut).
-- **Déploiement HTTPS** : voir `deploy/` (Caddyfile Let's Encrypt automatique, exemple nginx+certbot,
-  unité systemd, `.env.example`).
+- **Déploiement HTTPS / production** : pack complet dans [`deploy/`](deploy/PRODUCTION.md) —
+  `deploy.sh <tag>` (sauvegarde + déploiement + healthcheck), `rollback.sh <tag> [stamp]` (retour arrière
+  code + base), `backup.sh` (sauvegardes horodatées SQLite + clés de signature), `Dockerfile` +
+  `docker-compose.yml` + Caddy (HTTPS automatique Let's Encrypt), unité systemd, `.env.example`
+  (BASE_URL, SMTP_*). Garde-fou : `--reset` refusé si `CRM_LCP_PROD=1`. Checklist complète (DNS, pare-feu,
+  changement des mots de passe démo, cron de sauvegarde, RGPD) dans `deploy/PRODUCTION.md`.
 
 ## Modèle de données (SQLite)
 

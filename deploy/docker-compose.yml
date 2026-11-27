@@ -1,0 +1,26 @@
+services:
+  crm-lcp:
+    build: ..
+    container_name: crm-lcp
+    restart: always
+    env_file: .env
+    environment:
+      - CRM_LCP_DB=/data/crm_lcp.db
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - crm-data:/data
+      - crm-keys:/app/data
+  caddy:
+    image: caddy:2
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+volumes:
+  crm-data:
+  crm-keys:
+  caddy-data:
