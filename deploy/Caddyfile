@@ -1,5 +1,5 @@
 # Déploiement HTTPS automatique (Let's Encrypt) avec Caddy.
 # Domaine du CRM OFDTI pointant sur ce serveur (enregistrement DNS A). Modifier si autre domaine.
-lcp-certificationofdti.fr, www.lcp-certificationofdti.fr {
+lcp-certification-ofdti.fr, www.lcp-certification-ofdti.fr {
     reverse_proxy 127.0.0.1:8000
 }

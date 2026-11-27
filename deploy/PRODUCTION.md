@@ -1,7 +1,7 @@
 # Mise en production réelle (checklist)
 
 > Pour un déploiement guidé pas à pas sur **Infomaniak Public Cloud**
-> (domaine dédié `lcp-certificationofdti.fr`, VPS, DNS, SMTP, HTTPS) :
+> (domaine dédié `lcp-certification-ofdti.fr`, VPS, DNS, SMTP, HTTPS) :
 > voir **[INFOMANIAK.md](INFOMANIAK.md)**.
 
 ## 0. Ce que fait ce pack

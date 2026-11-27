@@ -2,13 +2,13 @@
 
 Procédure pour héberger le CRM sur un VPS Infomaniak avec HTTPS automatique.
 Le site existant `www.lcp-certification.fr` n'est **pas modifié** : le CRM est servi
-sur le domaine dédié **`lcp-certificationofdti.fr`**.
+sur le domaine dédié **`lcp-certification-ofdti.fr`**.
 
 ## 0. Nom de domaine retenu
 
-- **Domaine dédié : `lcp-certificationofdti.fr`** — à réserver dans le Manager Infomaniak
+- **Domaine dédié : `lcp-certification-ofdti.fr`** — à réserver dans le Manager Infomaniak
   (Domaines, ~10 €/an). Vérifier la disponibilité à la réservation ; si indisponible :
-  `lcp-certificationofdti.com`, ou repli gratuit en sous-domaine `lcpofdti.lcp-certification.fr`.
+  `lcp-certification-ofdti.com`, ou repli gratuit en sous-domaine `lcpofdti.lcp-certification.fr`.
 - Rappel AFNIC : le `.fr` est ouvert aux personnes morales/physiques ayant un lien avec
   l'UE/France — LCP Certification (Pessac) est éligible, et le nom correspond à votre marque.
 - Le site existant `www.lcp-certification.fr` (ton CRM actuel) reste intact et séparé.
@@ -35,12 +35,12 @@ sur le domaine dédié **`lcp-certificationofdti.fr`**.
 
 ## 3. Réserver le domaine et faire le DNS
 
-1. Manager → **Domaines** → commander `lcp-certificationofdti.fr` (si disponible).
+1. Manager → **Domaines** → commander `lcp-certification-ofdti.fr` (si disponible).
 2. Dans la zone DNS du domaine, ajouter :
    - enregistrement **A** `@` → `IP_VPS`,
    - enregistrement **A** `www` → `IP_VPS` (ou CNAME `www` → `@`),
    - TTL 300 pendant les tests.
-3. Vérifier depuis ton poste : `ping lcp-certificationofdti.fr` doit répondre sur `IP_VPS`.
+3. Vérifier depuis ton poste : `ping lcp-certification-ofdti.fr` doit répondre sur `IP_VPS`.
 
 ## 4. Boîte mail OFDTI (SMTP du CRM)
 
@@ -83,7 +83,7 @@ sudo nano deploy/.env
 Contenu complet (à adapter si autre domaine) :
 
 ```ini
-BASE_URL=https://lcp-certificationofdti.fr
+BASE_URL=https://lcp-certification-ofdti.fr
 CRM_LCP_PROD=1
 SMTP_HOST=mail.infomaniak.com
 SMTP_PORT=587
@@ -96,7 +96,7 @@ SMTP_TLS=1
 Le `Caddyfile` du dépôt contient déjà le bon domaine — il suffit de le copier :
 
 ```bash
-sudo cp deploy/Caddyfile /etc/caddy/Caddyfile   # contient lcp-certificationofdti.fr (modifier si autre domaine)
+sudo cp deploy/Caddyfile /etc/caddy/Caddyfile   # contient lcp-certification-ofdti.fr (modifier si autre domaine)
 sudo cp deploy/crm-lcp.service /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
@@ -109,10 +109,10 @@ sudo -u www-data python3 -c "import db; db.init_db()"   # base + données de dé
 sudo systemctl enable --now crm-lcp
 sudo systemctl enable --now caddy
 sleep 8
-curl -fsS https://lcp-certificationofdti.fr/health && echo " -> OK"
+curl -fsS https://lcp-certification-ofdti.fr/health && echo " -> OK"
 ```
 
-Ouvrir `https://lcp-certificationofdti.fr` → page de connexion
+Ouvrir `https://lcp-certification-ofdti.fr` → page de connexion
 (`admin@lcp.fr` / `admin123` en démo). Le certificat TLS est délivré et renouvelé
 automatiquement par Caddy (ports 80/443 ouverts + DNS OK requis).
 
@@ -150,7 +150,7 @@ Tags disponibles : `v0.5-prototype`, `v0.6-deploy-ready` (voir `git tag`).
 
 ## 12. Surveillance
 
-- Healthcheck externe : surveiller `https://lcp-certificationofdti.fr/health`
+- Healthcheck externe : surveiller `https://lcp-certification-ofdti.fr/health`
   (ex. UptimeRobot, gratuit).
 - Logs : `sudo journalctl -u crm-lcp -f` et `sudo journalctl -u caddy -f`.
 - Mises à jour de sécurité automatiques : `unattended-upgrades` (déjà installé).
@@ -168,7 +168,7 @@ conteneur) : sauvegarder le volume, ou adapter `APP_DIR`/chemin dans `backup.sh`
 
 ## 14. Checklist go-live
 
-- [ ] Domaine `lcp-certificationofdti.fr` réservé, DNS A `@`/`www` → IP flottante ; HTTPS OK (cadenas vert), certificat renouvelé auto
+- [ ] Domaine `lcp-certification-ofdti.fr` réservé, DNS A `@`/`www` → IP flottante ; HTTPS OK (cadenas vert), certificat renouvelé auto
 - [ ] Mots de passe de démo changés ; comptes inutiles supprimés
 - [ ] SMTP testé (outbox « envoyé » = oui) ; e-mails reçus sur ofdti@lcp-certification.fr
 - [ ] Cron de sauvegarde en place + restauration testée
