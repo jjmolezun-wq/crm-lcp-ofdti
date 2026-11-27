@@ -1,0 +1,17 @@
+[Unit]
+Description=CRM LCP - Certification OFDTI
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/crm-lcp
+EnvironmentFile=/opt/crm-lcp/deploy/.env
+Environment=PORT=8000
+Environment=HOST=127.0.0.1
+ExecStart=/usr/bin/python3 /opt/crm-lcp/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

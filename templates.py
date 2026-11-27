@@ -93,6 +93,8 @@ def badge_statut(s):
 def layout(user, title, body, unread=0):
     if user:
         nav = '<a href="/">Tableau de bord</a><a href="/dossiers">Dossiers</a><a href="/certificats">Certificats OFDTI</a><a href="/factures">Factures</a>'
+        if user["role"] in ("admin", "auditeur"):
+            nav += '<a href="/stats">Statistiques</a>'
         if user["role"] == "candidat":
             nav += '<a href="/dossiers/nouveau">+ Nouveau dossier</a>'
         if user["role"] == "admin":
@@ -216,6 +218,8 @@ def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, factur
     interne_check = '<label style="display:inline;font-weight:400"><input type="checkbox" name="interne" value="1" style="width:auto"> commentaire interne (visible staff LCP uniquement)</label>' if user["role"] in ("admin", "auditeur") else ""
     trans_options = "".join(f'<option value="{esc(t)}">{esc(STATUTS[t])}</option>' for t in trans)
     action_html = ""
+    if user["role"] in ("admin", "auditeur"):
+        action_html += f'<div class="card"><h2>Rapport d\'audit</h2><p><a class="btn small secondary" href="/dossiers/{d["id"]}/rapport-audit.pdf">Télécharger le rapport d\'audit (PDF)</a></p></div>'
     if trans:
         action_html = f"""
 <div class="card"><h2>Changer le statut</h2><form method="post" action="/dossiers/{d["id"]}/statut" class="row">
@@ -225,13 +229,16 @@ def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, factur
     cert_html = ""
     if cert:
         jr = jours_restants(cert["date_expiration"])
+        renouveler = ""
+        if user["role"] == "admin" or (user["role"] == "candidat" and d["candidat_id"] == user["id"]):
+            renouveler = f' <form method="post" action="/certificats/{cert["id"]}/renouveler" style="display:inline">{hidden_csrf(csrf)}<button class="btn small secondary">Demander le renouvellement</button></form>'
         cert_html = f"""
 <div class="card"><h2>Certificat OFDTI</h2>
 <table><tr><th>Numéro</th><td><b>{esc(cert["numero"])}</b></td></tr>
 <tr><th>Délivré le</th><td>{fmt_date_jour(cert["date_delivrance"])}</td></tr>
 <tr><th>Expire le</th><td>{fmt_date_jour(cert["date_expiration"])} ({jr} j restants)</td></tr>
 <tr><th>Statut</th><td>{badge_statut("ok" if cert["statut"] == "valide" else "muted")} {esc(cert["statut"])}</td></tr>
-<tr><th>Document</th><td><a class="btn small" href="/certificats/{cert["id"]}/print" target="_blank">Ouvrir / imprimer le certificat</a></td></tr></table></div>"""
+<tr><th>Documents</th><td><a class="btn small" href="/certificats/{cert["id"]}/print" target="_blank">Certificat (aperçu)</a> <a class="btn small" href="/certificats/{cert["id"]}/pdf">PDF signé</a> <a class="btn small secondary" href="/certificats/{cert["id"]}/verify" target="_blank">Vérifier la signature</a>{renouveler}</td></tr></table></div>"""
     fac_html = ""
     if facture:
         payer = f'<form method="post" action="/factures/{facture["id"]}/payer" style="display:inline">{hidden_csrf(csrf)}<button class="btn small">Marquer payée</button></form>' if user["role"] == "admin" and facture["statut"] != "payee" else ""
@@ -290,7 +297,7 @@ def page_certificat_print(cert, d, candidat, organisme_nom):
     return f"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><title>Certificat OFDTI {esc(cert["numero"])}</title><style>{CSS}</style></head>
 <body><div class="certificat">
-<p class="no-print"><a class="btn" href="javascript:window.print()">Imprimer</a> <a class="btn secondary" href="/certificats">Retour</a></p>
+<p class="no-print"><a class="btn" href="javascript:window.print()">Imprimer</a> <a class="btn secondary" href="/certificats/{cert['id']}/pdf">Télécharger le PDF signé</a> <a class="btn secondary" href="/certificats/{cert['id']}/verify">Vérifier la signature</a> <a class="btn secondary" href="/certificats">Retour</a></p>
 <h1>CERTIFICAT DE CONFORMITÉ OFDTI</h1>
 <p class="muted">délivré par LCP — Certification OFDTI</p>
 <p>Nous certifions que</p>
@@ -389,10 +396,11 @@ def page_admin_params(user, params, csrf, msg=None):
 
 def page_admin_outbox(user, emails):
     rows = "".join(
-        f'<tr><td class="muted">{fmt_date(e["at"])}</td><td>{esc(e["destinataire"])}</td><td>{esc(e["sujet"])}</td><td>{esc(e["contenu"][:120])}…</td></tr>'
+        f'<tr><td class="muted">{fmt_date(e["at"])}</td><td>{esc(e["destinataire"])}</td><td>{esc(e["sujet"])}</td><td>{esc(e["contenu"][:120])}…</td>'
+        f'<td>{badge_statut("ok" if e["envoye"] else "info")} {"envoyé (SMTP)" if e["envoye"] else "simulé"}</td></tr>'
         for e in emails)
     body = f"""
-<h1>Boîte d'envoi (simulation)</h1>
+<h1>Boîte d'envoi</h1>
 <div class="row" style="margin-bottom:14px">
 <a class="btn secondary small" href="/admin/users">Utilisateurs</a>
 <a class="btn secondary small" href="/admin/parametres">Paramètres</a>
@@ -400,8 +408,9 @@ def page_admin_outbox(user, emails):
 <a class="btn secondary small" href="/admin/audit">Journal d'audit</a>
 </div>
 <div class="card"><p class="muted">En production, ces e-mails partiraient par SMTP. Ici ils sont journalisés (table <code>outbox</code>).</p>
-<table><tr><th>Date</th><th>Destinataire</th><th>Sujet</th><th>Aperçu</th></tr>{rows}</table>
-{"<p class='muted'>Aucun e-mail.</p>" if not rows else ""}</div>"""
+<table><tr><th>Date</th><th>Destinataire</th><th>Sujet</th><th>Aperçu</th><th>Envoi</th></tr>{rows}</table>
+{"<p class='muted'>Aucun e-mail.</p>" if not rows else ""}</div>
+<p class="muted">Sans configuration SMTP (variables SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM — voir deploy/.env.example), les e-mails sont simulés et journalisés ici. Avec SMTP configuré, ils sont réellement envoyés et marqués « envoyé (SMTP) ».</p>"""
     return layout(user, "Boîte d'envoi", body)
 
 
@@ -420,6 +429,28 @@ def page_admin_audit(user, logs, users):
 </div>
 <div class="card"><table><tr><th>Date</th><th>Acteur</th><th>Action</th><th>Entité</th><th>Détail</th></tr>{rows}</table></div>"""
     return layout(user, "Journal d'audit", body)
+
+
+def page_stats(user, kpis, charts):
+    cards = "".join(f'<div class="stat"><div class="n">{esc(v[0])}</div><div class="l">{esc(v[1])}</div></div>' for v in kpis)
+    body = f"""
+<h1>Statistiques</h1>
+<div class="grid">{cards}</div>
+<div class="card"><h2>Dossiers par statut</h2>{charts["statuts"]}</div>
+<div class="card"><h2>Dossiers créés par mois (12 derniers mois)</h2>{charts["mensuel"]}</div>
+<div class="card"><h2>Factures par statut</h2>{charts["factures"]}</div>"""
+    return layout(user, "Statistiques", body)
+
+
+def page_verify(user, cert, ok, details):
+    badge = badge_statut("ok" if ok else "danger")
+    rows = "".join(f'<tr><th>{esc(k)}</th><td>{esc(v)}</td></tr>' for k, v in details)
+    body = f"""
+<h1>Vérification de signature — {esc(cert["numero"])}</h1>
+<div class="card"><p>Résultat : {badge} {"signature valide" if ok else "SIGNATURE INVALIDE"}</p>
+<table>{rows}</table></div>
+<p><a href="/certificats/{cert["id"]}/pdf">Télécharger le PDF signé</a> · <a href="/api/pubkey">Clé publique</a></p>"""
+    return layout(user, f"Vérification {cert['numero']}", body)
 
 
 def page_erreur(user, message, status="Erreur"):

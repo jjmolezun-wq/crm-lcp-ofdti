@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
 crm_lcp.db
+data/
+deploy/.env
 nohup.out

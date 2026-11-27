@@ -1,0 +1,5 @@
+Certificat délivré conformément au référentiel OFDTI en vigueur à la date de délivrance.
+Toute modification du périmètre certifié (services, sites, effectifs couverts) invalide le présent certificat.
+La certification est soumise à des audits de surveillance périodiques ; en cas de non-conformité majeure, le certificat peut être suspendu ou retiré.
+L'authenticité de ce document est vérifiable en ligne depuis le CRM LCP (page de vérification de la signature électronique).
+Remplacez ce fichier par vos mentions légales officielles (modèle de certificat fourni par LCP).

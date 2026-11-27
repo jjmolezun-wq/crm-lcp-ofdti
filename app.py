@@ -11,11 +11,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import automations
+import charts
 import db
+import pdf as pdfgen
 import templates as t
 from workflow import STATUTS, peut_voir_dossier, transitions_possibles
 
 SESSION_COOKIE = "lcp_session"
+BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:8000")
+
+
+def charger_mentions():
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "documents", "certificat_mentions.txt")
+    if os.path.exists(p):
+        with open(p) as f:
+            return [l.strip() for l in f if l.strip()]
+    return [
+        "Certificat délivré conformément au référentiel OFDTI en vigueur.",
+        "Toute modification du périmètre certifié invalide le présent certificat.",
+        "Vérification de l'authenticité en ligne disponible depuis le CRM LCP.",
+    ]
 SESSION_DUREE = timedelta(hours=8)
 TAILLE_MAX_PIECE = 10 * 1024 * 1024
 
@@ -714,6 +729,165 @@ def export_factures(ctx):
     export_csv(ctx, "factures_ofdti.csv",
                ["facture", "dossier", "organisme", "montant", "statut", "emise_le", "echeance", "payee_le", "relances"],
                [tuple(r) for r in rows])
+
+
+@route("GET", r"/certificats/(\d+)/pdf")
+def certificat_pdf(ctx, cid):
+    cert = ctx.conn.execute("SELECT * FROM certificats WHERE id = ?", (int(cid),)).fetchone()
+    if not cert:
+        return t.page_erreur(ctx.user, "Certificat introuvable.", "Introuvable"), 404
+    d = get_dossier(ctx, cert["dossier_id"])
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    signe_at = db.now()
+    pdf_bytes, pdf_hash, sig_hex, fp = pdfgen.certificat_pdf_signe(
+        cert, d, candidat, charger_mentions(), BASE_URL, signe_at)
+    ctx.conn.execute(
+        "INSERT INTO signatures(certificat_id, pdf_hash, signature, key_fingerprint, signe_at) VALUES (?,?,?,?,?) "
+        "ON CONFLICT(certificat_id) DO UPDATE SET pdf_hash=excluded.pdf_hash, signature=excluded.signature, "
+        "key_fingerprint=excluded.key_fingerprint, signe_at=excluded.signe_at",
+        (cert["id"], pdf_hash, sig_hex, fp, signe_at),
+    )
+    db.audit(ctx.conn, ctx.user["id"], "pdf_signe", "certificat", cert["id"], cert["numero"])
+    ctx.conn.commit()
+    respond(ctx, pdf_bytes, ctype="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="certificat_{cert["numero"]}.pdf"'})
+
+
+@route("GET", r"/certificats/(\d+)/verify")
+def certificat_verify(ctx, cid):
+    import hashlib
+    cert = ctx.conn.execute("SELECT * FROM certificats WHERE id = ?", (int(cid),)).fetchone()
+    if not cert:
+        return t.page_erreur(ctx.user, "Certificat introuvable.", "Introuvable"), 404
+    d = get_dossier(ctx, cert["dossier_id"])
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    sig = ctx.conn.execute("SELECT * FROM signatures WHERE certificat_id = ?", (cert["id"],)).fetchone()
+    _, pub = pdfgen.get_keys()
+    unsigned = pdfgen.certificat_pdf_unsigned(cert, d, candidat, charger_mentions())
+    hash_now = hashlib.sha256(unsigned).hexdigest()
+    if sig:
+        ok = pdfgen.verifier_hash(unsigned, sig["signature"], pub) and hash_now == sig["pdf_hash"]
+        details = [
+            ("Certificat", cert["numero"]),
+            ("Empreinte SHA-256 recalculée", hash_now),
+            ("Empreinte enregistrée", sig["pdf_hash"]),
+            ("Correspondance des empreintes", "oui" if hash_now == sig["pdf_hash"] else "NON"),
+            ("Signature RSA-2048 vérifiée", "oui" if pdfgen.verifier_hash(unsigned, sig["signature"], pub) else "NON"),
+            ("Empreinte de clé publique", sig["key_fingerprint"]),
+            ("Signé le", sig["signe_at"]),
+        ]
+    else:
+        ok = False
+        details = [("Certificat", cert["numero"]), ("État", "aucune signature enregistrée — téléchargez d'abord le PDF signé")]
+    return t.page_verify(ctx.user, cert, ok, details)
+
+
+@route("GET", r"/api/pubkey", roles=None, csrf=False)
+def pubkey(ctx):
+    if not ctx.user:
+        redirect(ctx, "/login?next=/api/pubkey")
+        return
+    _, pub = pdfgen.get_keys()
+    from cryptography.hazmat.primitives import serialization
+    pem = pub.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    respond(ctx, pem, ctype="application/x-pem-file")
+
+
+@route("POST", r"/certificats/(\d+)/renouveler", roles=["admin", "candidat"])
+def cert_renouveler(ctx, cid):
+    cert = ctx.conn.execute("SELECT * FROM certificats WHERE id = ?", (int(cid),)).fetchone()
+    if not cert:
+        return t.page_erreur(ctx.user, "Certificat introuvable.", "Introuvable"), 404
+    d = get_dossier(ctx, cert["dossier_id"])
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    existe = ctx.conn.execute("SELECT id FROM dossiers WHERE renouvellement_de = ?", (cert["id"],)).fetchone()
+    if existe:
+        redirect(ctx, f"/dossiers/{existe['id']}?msg=Dossier de renouvellement déjà créé.")
+        return
+    numero = db.next_numero(ctx.conn, "DOS", "dossiers", "numero")
+    now_s = db.now()
+    cur = ctx.conn.execute(
+        "INSERT INTO dossiers(numero, candidat_id, type_service, description, statut, renouvellement_de, created_at, updated_at) "
+        "VALUES (?,?,?,?, 'brouillon', ?,?,?)",
+        (numero, d["candidat_id"], f"Renouvellement certification {cert['numero']}",
+         f"Renouvellement de la certification OFDTI {cert['numero']} (expire le {cert['date_expiration'][:10]}).",
+         cert["id"], now_s, now_s),
+    )
+    did = cur.lastrowid
+    ctx.conn.execute(
+        "INSERT INTO historique(dossier_id, ancien, nouveau, acteur_id, commentaire, at) VALUES (?,?,?,?,?,?)",
+        (did, None, "brouillon", ctx.user["id"], f"Renouvellement de {cert['numero']}", now_s),
+    )
+    db.audit(ctx.conn, ctx.user["id"], "renouvellement_cree", "dossier", did, numero)
+    db.notify(ctx.conn, d["candidat_id"], "renouvellement",
+              f"Dossier de renouvellement {numero} créé",
+              f"Un dossier de renouvellement {numero} pour la certification {cert['numero']} a été créé en brouillon.",
+              lien=f"/dossiers/{did}", cle=f"renou_man:{cert['id']}")
+    ctx.conn.commit()
+    redirect(ctx, f"/dossiers/{did}?msg=Dossier de renouvellement {numero} créé (brouillon à déposer).")
+
+
+@route("GET", r"/dossiers/(\d+)/rapport-audit.pdf", roles=["admin", "auditeur"])
+def rapport_audit_pdf(ctx, did):
+    d = get_dossier(ctx, int(did))
+    if not d or not verifier_acces_dossier(ctx, d):
+        return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    users = ctx.users_map()
+    coms = ctx.conn.execute(
+        "SELECT * FROM commentaires WHERE dossier_id = ? AND interne = 1 ORDER BY at, id", (d["id"],)
+    ).fetchall()
+    lignes = [(users.get(c["auteur_id"], {}).get("nom", "?"), c["at"], c["contenu"]) for c in coms]
+    pdf_bytes = pdfgen.build_pdf([pdfgen.page_rapport_audit(d, candidat, lignes)])
+    db.audit(ctx.conn, ctx.user["id"], "rapport_audit_pdf", "dossier", d["id"], d["numero"])
+    ctx.conn.commit()
+    respond(ctx, pdf_bytes, ctype="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="rapport_audit_{d["numero"]}.pdf"'})
+
+
+@route("GET", r"/stats", roles=["admin", "auditeur"])
+def stats(ctx):
+    c = ctx.conn
+    par_statut = c.execute("SELECT statut, COUNT(*) AS n FROM dossiers GROUP BY statut ORDER BY n DESC").fetchall()
+    data_statuts = [(STATUTS.get(r["statut"], r["statut"]), r["n"]) for r in par_statut] or [("aucun dossier", 0)]
+    limite_mois = db.iso(db.utcnow() - timedelta(days=365))[:8] + "01"
+    mens = c.execute(
+        "SELECT substr(created_at, 1, 7) AS m, COUNT(*) AS n FROM dossiers WHERE created_at >= ? GROUP BY m ORDER BY m",
+        (limite_mois,),
+    ).fetchall()
+    data_mensuel = [(r["m"], r["n"]) for r in mens] or [("—", 0)]
+    frows = c.execute("SELECT statut, COUNT(*) AS n FROM factures GROUP BY statut").fetchall()
+    couleurs = {"payee": "#177245", "emise": "#1a56b0", "en_retard": "#b3261e"}
+    data_factures = [(r["statut"], r["n"], couleurs.get(r["statut"], "#5b6b7c")) for r in frows] or [("aucune", 0, "#5b6b7c")]
+    decisions = c.execute("SELECT COUNT(*) AS n FROM dossiers WHERE decision_at IS NOT NULL").fetchone()["n"]
+    certifies = c.execute("SELECT COUNT(*) AS n FROM dossiers WHERE statut = 'certifie'").fetchone()["n"]
+    taux = round(100 * certifies / decisions) if decisions else 0
+    delai = c.execute(
+        "SELECT AVG(julianday(decision_at) - julianday(depose_at)) AS d FROM dossiers "
+        "WHERE decision_at IS NOT NULL AND depose_at IS NOT NULL").fetchone()["d"]
+    retard = c.execute("SELECT COUNT(*) AS n, COALESCE(SUM(montant), 0) AS s FROM factures WHERE statut = 'en_retard'").fetchone()
+    certs_actifs = c.execute("SELECT COUNT(*) AS n FROM certificats WHERE statut = 'valide'").fetchone()["n"]
+    certs_exp90 = c.execute(
+        "SELECT COUNT(*) AS n FROM certificats WHERE statut = 'valide' AND date_expiration < ?",
+        (db.iso(db.utcnow() + timedelta(days=90)),)).fetchone()["n"]
+    kpis = [
+        (f"{delai:.0f} j" if delai else "—", "délai moyen dépôt → décision"),
+        (f"{taux} %", "taux de certification"),
+        (f"{retard['s']:.0f} €", f"en retard ({retard['n']} factures)"),
+        (certs_actifs, "certificats valides"),
+        (certs_exp90, "expirent < 90 j"),
+    ]
+    charts_html = {
+        "statuts": charts.bar_chart(data_statuts),
+        "mensuel": charts.bar_chart(data_mensuel, color="#7fb3ff", label_size=9),
+        "factures": charts.donut(data_factures),
+    }
+    return t.page_stats(ctx.user, kpis, charts_html)
 
 
 @route("GET", r"/health", roles=None, csrf=False)

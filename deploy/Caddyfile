@@ -1,0 +1,5 @@
+# Déploiement HTTPS automatique (Let's Encrypt) avec Caddy.
+# Remplacer crm-lcp.exemple.fr par votre nom de domaine pointant sur le serveur (enregistrement DNS A).
+crm-lcp.exemple.fr {
+    reverse_proxy 127.0.0.1:8000
+}

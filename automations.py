@@ -6,12 +6,14 @@ import db
 
 
 def run_automations(conn):
-    result = {"factures_en_retard": 0, "relances": 0, "alertes_expiration": 0, "alertes_instruction": 0, "certificats_expires": 0}
+    result = {"factures_en_retard": 0, "relances": 0, "alertes_expiration": 0, "alertes_instruction": 0,
+              "certificats_expires": 0, "renouvellements": 0}
     now = db.utcnow()
     today = now.date()
 
     seuils = json.loads(db.get_param(conn, "seuils_relance_certificat_jours", "[90, 30, 7]"))
     delai_instruction = int(db.get_param(conn, "delai_alerte_instruction_jours", "30"))
+    seuil_renou = int(db.get_param(conn, "seuil_renouvellement_jours", "90"))
 
     factures = conn.execute(
         "SELECT f.*, d.numero AS dossier_numero, d.candidat_id, u.email AS candidat_email, u.nom AS candidat_nom "
@@ -85,6 +87,34 @@ def run_automations(conn):
                               f"Bonjour,\n\nVotre certification OFDTI {c['numero']} expire le {c['date_expiration'][:10]} (dans {jours_restants} jour(s)).\nDéposez un dossier de renouvellement depuis votre CRM LCP.\n\nLCP — Certification OFDTI",
                               dossier_id=c["dossier_id"])
                 break
+        if 0 <= jours_restants <= seuil_renou:
+            existe = conn.execute("SELECT id FROM dossiers WHERE renouvellement_de = ?", (c["id"],)).fetchone()
+            if not existe:
+                numero = db.next_numero(conn, "DOS", "dossiers", "numero")
+                now_s = db.now()
+                cur = conn.execute(
+                    "INSERT INTO dossiers(numero, candidat_id, type_service, description, statut, renouvellement_de, created_at, updated_at) "
+                    "VALUES (?,?,?,?, 'brouillon', ?,?,?)",
+                    (numero, c["candidat_id"], f"Renouvellement certification {c['numero']}",
+                     f"Dossier de renouvellement automatique de la certification OFDTI {c['numero']} (expire le {c['date_expiration'][:10]}).",
+                     c["id"], now_s, now_s),
+                )
+                did = cur.lastrowid
+                admin_sys = conn.execute("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").fetchone()
+                conn.execute(
+                    "INSERT INTO historique(dossier_id, ancien, nouveau, acteur_id, commentaire, at) VALUES (?,?,?,?,?,?)",
+                    (did, None, "brouillon", admin_sys["id"] if admin_sys else c["candidat_id"],
+                     f"Renouvellement automatique de {c['numero']}", now_s),
+                )
+                db.notify(conn, c["candidat_id"], "renouvellement",
+                          f"Renouvellement de {c['numero']} à préparer",
+                          f"Votre certification OFDTI {c['numero']} expire le {c['date_expiration'][:10]}. Un dossier de renouvellement {numero} a été créé automatiquement en brouillon : complétez-le et déposez-le.",
+                          lien=f"/dossiers/{did}", cle=f"renou:{c['id']}")
+                db.send_email(conn, c["candidat_email"],
+                              f"[LCP] Renouvellement de votre certification OFDTI {c['numero']}",
+                              f"Bonjour,\n\nVotre certification OFDTI {c['numero']} expire le {c['date_expiration'][:10]}.\nUn dossier de renouvellement {numero} a été créé automatiquement dans votre CRM LCP : déposez-le pour renouveler.\n\nLCP — Certification OFDTI",
+                              dossier_id=did)
+                result["renouvellements"] += 1
 
     limite = db.iso(now - timedelta(days=delai_instruction))
     dossiers = conn.execute(

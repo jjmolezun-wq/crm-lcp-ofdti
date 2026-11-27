@@ -44,7 +44,7 @@ Régénération : lancer l'app, capturer les pages HTML, puis
 - [08 — Notifications](docs/screenshots/08-notifications.svg)
 - [09 — Administration (utilisateurs)](docs/screenshots/09-admin-utilisateurs.svg)
 - [10 — Tableau de bord candidat](docs/screenshots/10-tableau-de-bord-candidat.svg)
-```
+- [11 — Statistiques (graphiques SVG)](docs/screenshots/11-statistiques.svg)
 
 ## Fonctionnalités du prototype
 
@@ -68,6 +68,23 @@ Régénération : lancer l'app, capturer les pages HTML, puis
 - **Administration** : gestion des utilisateurs (création, activation/désactivation), paramètres de la certification,
   journal d'audit complet (qui a fait quoi, quand), boîte d'envoi.
 - **Exports CSV** : dossiers, registre des certifiés OFDTI, factures.
+- **Certificats PDF signés** : génération PDF (pur Python, sans dépendance) + signature électronique
+  RSA-2048 (PSS/SHA-256) via `pdf.py` ; clé privée générée dans `data/` (hors dépôt), clé publique servie
+  sur `/api/pubkey`, page de vérification `/certificats/{id}/verify` qui recalcule l'empreinte et contrôle
+  la signature. Les mentions légales du certificat sont éditables dans `templates/documents/certificat_mentions.txt`
+  (remplacez par votre modèle de certificat officiel).
+- **Rapport d'audit PDF** : `/dossiers/{id}/rapport-audit.pdf` (observations internes, pour staff LCP).
+- **Rappels de renouvellement** : à J-90 (paramètre `seuil_renouvellement_jours`), un dossier de
+  renouvellement est créé automatiquement en brouillon + notification + e-mail ; bouton « Demander le
+  renouvellement » sur le certificat.
+- **Vrai envoi d'e-mails (SMTP)** : `emailer.py` envoie réellement via SMTP si `SMTP_HOST` etc. sont
+  définis (voir `deploy/.env.example`) ; sinon repli sécurisé en simulation journalisée (table `outbox`,
+  statut « envoyé (SMTP) » / « simulé »).
+- **Tableau de bord avancé** : page `/stats` (admin/auditeur) — KPI (délai moyen dépôt→décision, taux de
+  certification, montants en retard, certificats actifs/expirant), graphiques SVG (dossiers par statut,
+  par mois, factures par statut).
+- **Déploiement HTTPS** : voir `deploy/` (Caddyfile Let's Encrypt automatique, exemple nginx+certbot,
+  unité systemd, `.env.example`).
 
 ## Modèle de données (SQLite)
 
@@ -87,9 +104,15 @@ Régénération : lancer l'app, capturer les pages HTML, puis
 
 ```
 app.py          serveur HTTP, routes, auth, CSRF, handlers
- db.py          schéma SQLite, seed, helpers (audit, notifications, e-mails)
+ db.py          schéma SQLite, migrations, seed, helpers (audit, notifications, e-mails)
  workflow.py    statuts et transitions du cycle de certification OFDTI
- automations.py relances, échéances, alertes (tâche de fond 60 s)
+ automations.py relances, échéances, alertes, renouvellements (tâche de fond 60 s)
  templates.py   vues HTML (français)
- tests.py       tests de bout en bout
+ emailer.py     envoi SMTP réel (repli simulation si non configuré)
+ pdf.py         génération PDF + signature RSA-2048 + vérification
+ charts.py      graphiques SVG pour /stats
+ tests.py       tests de bout en bout (26 scénarios)
+ tools/         render_screenshots.py (visuels SVG des écrans)
+ deploy/        Caddyfile, nginx, systemd, .env.example, guide HTTPS
+ templates/documents/  modèle de mentions du certificat (à remplacer par le vôtre)
 ```

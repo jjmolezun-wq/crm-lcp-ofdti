@@ -14,6 +14,7 @@ DEFAULT_PARAMS = {
     "delai_paiement_jours": "30",
     "seuils_relance_certificat_jours": "[90, 30, 7]",
     "delai_alerte_instruction_jours": "30",
+    "seuil_renouvellement_jours": "90",
 }
 
 SCHEMA = """
@@ -131,6 +132,14 @@ CREATE TABLE IF NOT EXISTS parametres (
     cle TEXT PRIMARY KEY,
     valeur TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS signatures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    certificat_id INTEGER NOT NULL UNIQUE REFERENCES certificats(id),
+    pdf_hash TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    key_fingerprint TEXT NOT NULL,
+    signe_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_dossiers_statut ON dossiers(statut);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, lu);
 """
@@ -225,10 +234,25 @@ def notify_role(conn, role, type_, titre, message, lien=None, cle=None):
 
 
 def send_email(conn, destinataire, sujet, contenu, dossier_id=None):
+    import emailer
+    envoye = False
+    try:
+        envoye = emailer.send(destinataire, sujet, contenu)
+    except Exception:
+        envoye = False
     conn.execute(
-        "INSERT INTO outbox(destinataire, sujet, contenu, dossier_id, at) VALUES (?,?,?,?,?)",
-        (destinataire, sujet, contenu, dossier_id, now()),
+        "INSERT INTO outbox(destinataire, sujet, contenu, dossier_id, at, envoye) VALUES (?,?,?,?,?,?)",
+        (destinataire, sujet, contenu, dossier_id, now(), 1 if envoye else 0),
     )
+
+
+def migrate(conn):
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(outbox)").fetchall()}
+    if "envoye" not in cols:
+        conn.execute("ALTER TABLE outbox ADD COLUMN envoye INTEGER NOT NULL DEFAULT 0")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(dossiers)").fetchall()}
+    if "renouvellement_de" not in cols:
+        conn.execute("ALTER TABLE dossiers ADD COLUMN renouvellement_de INTEGER REFERENCES certificats(id)")
 
 
 def seed(conn):
@@ -315,6 +339,7 @@ def init_db(reset=False):
         os.remove(DB_PATH)
     conn = connect()
     conn.executescript(SCHEMA)
+    migrate(conn)
     seed(conn)
     conn.commit()
     conn.close()

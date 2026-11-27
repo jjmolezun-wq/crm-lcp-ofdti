@@ -102,6 +102,26 @@ def main():
         facs = get(admin, "/factures").read().decode("utf-8")
         check("liste factures", "FAC-" in facs)
 
+        mpdf = re.search(r"/certificats/(\d+)/pdf", page)
+        if mpdf:
+            cid = mpdf.group(1)
+            r = get(admin, f"/certificats/{cid}/pdf")
+            pdfb = r.read()
+            check("PDF signé généré", r.status == 200 and pdfb.startswith(b"%PDF") and "pdf" in (r.headers.get("Content-Type") or ""))
+            ver = get(admin, f"/certificats/{cid}/verify").read().decode("utf-8")
+            check("vérification signature RSA valide", "signature valide" in ver)
+            pub = get(admin, "/api/pubkey").read().decode("utf-8")
+            check("clé publique servie", "BEGIN PUBLIC KEY" in pub)
+        else:
+            check("PDF signé généré", False, "lien pdf introuvable")
+
+        stats = get(admin, "/stats").read().decode("utf-8")
+        check("page statistiques avec graphiques SVG", "<svg" in stats and "Statistiques" in stats)
+        dos = get(admin, "/dossiers").read().decode("utf-8")
+        check("dossier de renouvellement auto créé", "Renouvellement" in dos)
+        outbox2 = get(admin, "/admin/outbox").read().decode("utf-8")
+        check("outbox: e-mails simulés sans SMTP", "simulé" in outbox2)
+
         mcert = re.search(r"/certificats/(\d+)/print", get(cand, "/certificats").read().decode("utf-8"))
         if mcert:
             cert_page = get(cand, f"/certificats/{mcert.group(1)}/print").read().decode("utf-8")
