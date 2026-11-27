@@ -207,6 +207,12 @@ def render_form(form, cv, x, y, w):
 
 def render_block(el, cv, x, y, w):
     name = el.name
+    if name == "svg":
+        import re as _re
+        h = int(el.get("height", 260))
+        frag = _re.sub(r"<svg ", f'<svg x="{x}" y="{y}" ', str(el), count=1)
+        cv.add(frag)
+        return y + h + 10
     if name == "h1":
         cv.text(x, y + 22, el.get_text(strip=True), size=22, weight="bold")
         return y + 40
