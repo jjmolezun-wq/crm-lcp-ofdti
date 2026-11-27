@@ -7,13 +7,17 @@ import db
 
 def run_automations(conn):
     result = {"factures_en_retard": 0, "relances": 0, "alertes_expiration": 0, "alertes_instruction": 0,
-              "certificats_expires": 0, "renouvellements": 0}
+              "certificats_expires": 0, "renouvellements": 0, "recevabilite_hors_delai": 0,
+              "decision_hors_delai": 0, "abandons": 0}
     now = db.utcnow()
     today = now.date()
 
-    seuils = json.loads(db.get_param(conn, "seuils_relance_certificat_jours", "[90, 30, 7]"))
+    seuils = json.loads(db.get_param(conn, "seuils_relance_certificat_jours", "[360, 90, 30, 7]"))
     delai_instruction = int(db.get_param(conn, "delai_alerte_instruction_jours", "30"))
-    seuil_renou = int(db.get_param(conn, "seuil_renouvellement_jours", "90"))
+    seuil_renou = int(db.get_param(conn, "seuil_renouvellement_jours", "360"))
+    delai_recev = int(db.get_param(conn, "delai_recevabilite_jours", "15"))
+    delai_dec = int(db.get_param(conn, "delai_decision_mois", "9")) * 30
+    delai_compl = int(db.get_param(conn, "delai_complement_mois", "4")) * 30
 
     factures = conn.execute(
         "SELECT f.*, d.numero AS dossier_numero, d.candidat_id, u.email AS candidat_email, u.nom AS candidat_nom "
@@ -117,6 +121,51 @@ def run_automations(conn):
                 result["renouvellements"] += 1
 
     limite = db.iso(now - timedelta(days=delai_instruction))
+    dossiers = conn.execute(
+        "SELECT d.*, u.nom AS candidat_nom, u.organisme FROM dossiers d JOIN users u ON u.id = d.candidat_id "
+        "WHERE d.statut IN ('depose', 'en_recevabilite') AND d.updated_at < ?",
+        (db.iso(now - timedelta(days=delai_recev)),),
+    ).fetchall()
+    for d in dossiers:
+        db.notify_role(conn, "admin", "recevabilite_hors_delai",
+                       f"Recevabilité hors délai ({delai_recev} j) — {d['numero']}",
+                       f"La demande {d['numero']} ({d['organisme'] or d['candidat_nom']}) est en attente de revue de recevabilité depuis le {d['updated_at'][:10]} (délai réglementaire : {delai_recev} jours).",
+                       lien=f"/dossiers/{d['id']}", cle=f"recev:{d['id']}:{delai_recev}")
+        result["recevabilite_hors_delai"] += 1
+
+    dossiers = conn.execute(
+        "SELECT d.*, u.nom AS candidat_nom, u.organisme FROM dossiers d JOIN users u ON u.id = d.candidat_id "
+        "WHERE d.statut IN ('recevable', 'en_audit', 'non_conforme') AND d.updated_at < ?",
+        (db.iso(now - timedelta(days=delai_dec)),),
+    ).fetchall()
+    for d in dossiers:
+        db.notify_role(conn, "admin", "decision_hors_delai",
+                       f"Décision hors délai ({delai_dec // 30} mois) — {d['numero']}",
+                       f"Le dossier {d['numero']} ({d['organisme'] or d['candidat_nom']}) attend une décision depuis le {d['updated_at'][:10]} (délai réglementaire : {delai_dec // 30} mois après recevabilité).",
+                       lien=f"/dossiers/{d['id']}", cle=f"dec:{d['id']}:{delai_dec // 30}")
+        result["decision_hors_delai"] += 1
+
+    dossiers = conn.execute(
+        "SELECT d.*, u.nom AS candidat_nom, u.organisme, u.email AS candidat_email FROM dossiers d JOIN users u ON u.id = d.candidat_id "
+        "WHERE d.statut = 'non_recevable' AND d.updated_at < ?",
+        (db.iso(now - timedelta(days=delai_compl)),),
+    ).fetchall()
+    for d in dossiers:
+        conn.execute("UPDATE dossiers SET statut = 'abandonne', updated_at = ? WHERE id = ?", (db.iso(now), d["id"]))
+        admin_sys = conn.execute("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").fetchone()
+        conn.execute(
+            "INSERT INTO historique(dossier_id, ancien, nouveau, acteur_id, commentaire, at) VALUES (?,?,?,?,?,?)",
+            (d["id"], "non_recevable", "abandonne", admin_sys["id"] if admin_sys else d["candidat_id"],
+             f"Abandon après {delai_compl // 30} mois sans pièces complémentaires (procédure V016)", db.iso(now)),
+        )
+        db.notify(conn, d["candidat_id"], "abandon", f"Dossier {d['numero']} abandonné",
+                  f"Faute de pièces complémentaires dans les {delai_compl // 30} mois, la procédure de certification {d['numero']} est abandonnée (conformément à la procédure de certification).",
+                  lien=f"/dossiers/{d['id']}", cle=f"abandon:{d['id']}")
+        db.send_email(conn, d["candidat_email"], f"[LCP] Abandon de la procédure — {d['numero']}",
+                      f"Bonjour,\n\nSans réception des pièces complémentaires dans les {delai_compl // 30} mois, la procédure de certification {d['numero']} est abandonnée et le dossier détruit.\n\nLCP — Certification OFDTI",
+                      dossier_id=d["id"])
+        result["abandons"] += 1
+
     dossiers = conn.execute(
         "SELECT d.*, u.nom AS candidat_nom, u.organisme FROM dossiers d JOIN users u ON u.id = d.candidat_id "
         "WHERE d.statut = 'en_instruction' AND d.updated_at < ?",

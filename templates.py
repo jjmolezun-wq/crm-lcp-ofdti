@@ -36,14 +36,14 @@ def jours_restants(ts):
 CSS = """
 * { box-sizing: border-box; }
 body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f4f6fa; color: #1c2733; }
-header { background: #14304f; color: #fff; padding: 0 24px; display: flex; align-items: center; gap: 24px; height: 56px; }
+header { background: #F0980C; color: #2b1d00; padding: 0 24px; display: flex; align-items: center; gap: 24px; height: 56px; }
 header .brand { font-weight: 700; font-size: 18px; white-space: nowrap; }
-header .brand span { color: #7fb3ff; }
+header .brand span { color: #7a4d00; }
 header nav { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
-header nav a { color: #d7e3f4; text-decoration: none; padding: 8px 12px; border-radius: 6px; font-size: 14px; }
-header nav a:hover { background: #1f4568; color: #fff; }
-header .user { font-size: 13px; color: #bcd2ee; white-space: nowrap; }
-header .user b { color: #fff; }
+header nav a { color: #4a3400; text-decoration: none; padding: 8px 12px; border-radius: 6px; font-size: 14px; }
+header nav a:hover { background: #d98a06; color: #1c1200; }
+header .user { font-size: 13px; color: #4a3400; white-space: nowrap; }
+header .user b { color: #1c1200; }
 .role { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; background: #2c5d8f; color: #fff; margin-left: 6px; }
 main { max-width: 1120px; margin: 24px auto; padding: 0 16px; }
 h1 { font-size: 22px; margin: 0 0 16px; }
@@ -59,8 +59,8 @@ a { color: #1668c4; }
 .badge.danger { background: #fde2e2; color: #b3261e; }
 .badge.info { background: #ddeafd; color: #1a56b0; }
 .badge.muted { background: #e8edf3; color: #5b6b7c; }
-.btn { display: inline-block; background: #1668c4; color: #fff !important; border: none; border-radius: 7px; padding: 8px 14px; font-size: 14px; cursor: pointer; text-decoration: none; }
-.btn:hover { background: #0f52a3; }
+.btn { display: inline-block; background: #F0980C; color: #2b1d00 !important; border: none; border-radius: 7px; padding: 8px 14px; font-size: 14px; cursor: pointer; text-decoration: none; font-weight: 600; }
+.btn:hover { background: #d98a06; }
 .btn.secondary { background: #e8edf3; color: #1c2733 !important; }
 .btn.danger { background: #b3261e; }
 .btn.small { padding: 5px 10px; font-size: 13px; }
@@ -79,10 +79,12 @@ label { display: block; font-size: 13px; font-weight: 600; color: #42566b; margi
 .comment { border-left: 3px solid #c9d4e0; padding: 6px 12px; margin: 8px 0; background: #f8fafc; border-radius: 0 8px 8px 0; }
 .comment.interne { border-left-color: #b3261e; background: #fdf3f3; }
 .login-box { max-width: 380px; margin: 80px auto; }
-.certificat { max-width: 760px; margin: 40px auto; background: #fff; border: 3px double #14304f; padding: 48px; text-align: center; }
-.certificat h1 { font-size: 28px; }
-.certificat .num { font-size: 20px; font-weight: 700; letter-spacing: .08em; margin: 18px 0; }
-@media print { header, .no-print { display: none; } body { background: #fff; } .certificat { border: 3px double #000; margin: 0; } }
+.certificat { max-width: 760px; margin: 40px auto; background: #fff; border: 3px double #F0980C; padding: 48px; text-align: center; }
+.certificat h1 { font-size: 28px; color: #F0980C; }
+.certificat .num { font-size: 20px; font-weight: 700; letter-spacing: .08em; margin: 18px 0; color: #F0980C; }
+.checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 14px; text-align: left; margin: 10px 0; }
+.checks label { font-weight: 400; font-size: 13px; margin: 0; }
+@media print { header, .no-print { display: none; } body { background: #fff; } .certificat { border: 3px double #F0980C; margin: 0; } }
 """
 
 
@@ -92,7 +94,7 @@ def badge_statut(s):
 
 def layout(user, title, body, unread=0):
     if user:
-        nav = '<a href="/">Tableau de bord</a><a href="/dossiers">Dossiers</a><a href="/certificats">Certificats OFDTI</a><a href="/factures">Factures</a>'
+        nav = '<a href="/">Tableau de bord</a><a href="/dossiers">Dossiers</a><a href="/certificats">Certificats OFDTI</a><a href="/factures">Factures</a><a href="/documents">Documents</a>'
         if user["role"] in ("admin", "auditeur"):
             nav += '<a href="/stats">Statistiques</a>'
         if user["role"] == "candidat":
@@ -186,20 +188,30 @@ def page_dossiers(user, dossiers, filtre_statut, q):
     return layout(user, "Dossiers", body)
 
 
-def page_dossier_new(user, csrf, error=None):
+def page_dossier_new(user, csrf, domaines, types, error=None):
     err = f'<div class="erreur">{esc(error)}</div>' if error else ""
+    checks_d = "".join(
+        f'<label><input type="checkbox" name="domaines" value="{esc(c)}" style="width:auto"> {esc(l)}</label>'
+        for c, l in domaines)
+    checks_t = "".join(
+        f'<label><input type="checkbox" name="types_formation" value="{esc(t)}" style="width:auto"> {esc(t)}</label>'
+        for t in types)
     body = f"""
 <h1>Nouveau dossier de certification OFDTI</h1>
 <div class="card"><form method="post" action="/dossiers">
 {hidden_csrf(csrf)}{err}
-<label>Type de service à certifier</label><input type="text" name="type_service" required placeholder="ex : Conseil stratégique">
-<label>Description de la demande</label><textarea name="description" required placeholder="Périmètre, volumétrie, organisation..."></textarea>
+<label>Domaines de certification demandés</label>
+<div class="checks">{checks_d}</div>
+<label>Types de formation</label>
+<div class="checks">{checks_t}</div>
+<p class="muted">FIP : formation initiale présentielle · FID : initiale à distance · FCP : continue présentielle · FCD : continue à distance · FPT : continue en milieu professionnel (tutorat) domaine énergie.</p>
+<label>Description de la demande</label><textarea name="description" required placeholder="Périmètre, sites, volumétrie, organisation..."></textarea>
 <div style="margin-top:14px"><button class="btn" type="submit">Créer le brouillon</button> <a class="btn secondary" href="/dossiers">Annuler</a></div>
 </form></div>"""
     return layout(user, "Nouveau dossier", body)
 
 
-def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, facture, trans, csrf, msg=None, erreur=None):
+def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, facture, trans, csrf, msg=None, erreur=None, portee=""):
     flash = f'<div class="flash">{esc(msg)}</div>' if msg else ""
     err = f'<div class="erreur">{esc(erreur)}</div>' if erreur else ""
     hist_rows = "".join(
@@ -256,6 +268,7 @@ def page_dossier_detail(user, d, hist, pieces, commentaires, users, cert, factur
 <table><tr><th>Organisme</th><td>{esc(d["organisme"] or users.get(d["candidat_id"], {}).get("organisme", ""))}</td></tr>
 <tr><th>Contact</th><td>{esc(users.get(d["candidat_id"], {}).get("nom", ""))} — {esc(users.get(d["candidat_id"], {}).get("email", ""))}</td></tr>
 <tr><th>Type de service</th><td>{esc(d["type_service"])}</td></tr>
+{"<tr><th>Portée (domaines · types)</th><td>" + esc(portee) + "</td></tr>" if portee else ""}
 <tr><th>Description</th><td>{esc(d["description"])}</td></tr>
 <tr><th>Créé le</th><td class="muted">{fmt_date(d["created_at"])}</td></tr>
 <tr><th>Déposé le</th><td class="muted">{fmt_date(d["depose_at"])}</td></tr>
@@ -451,6 +464,17 @@ def page_verify(user, cert, ok, details):
 <table>{rows}</table></div>
 <p><a href="/certificats/{cert["id"]}/pdf">Télécharger le PDF signé</a> · <a href="/api/pubkey">Clé publique</a></p>"""
     return layout(user, f"Vérification {cert['numero']}", body)
+
+
+def page_documents(user, fichiers):
+    rows = "".join(
+        f'<tr><td><a href="/documents/{esc(f)}">{esc(f)}</a></td><td class="muted">{esc(f.rsplit(".", 1)[-1])}</td></tr>'
+        for f in fichiers)
+    body = f"""
+<h1>Documents de référence</h1>
+<div class="card"><p class="muted">Procédure de certification OFDTI, modèle de certificat et mentions légales (charte graphique LCP, couleur #F0980C). Contact : ofdti@lcp-certification.fr · www.lcp-certification.fr</p>
+<table><tr><th>Document</th><th>Format</th></tr>{rows}</table></div>"""
+    return layout(user, "Documents", body)
 
 
 def page_erreur(user, message, status="Erreur"):

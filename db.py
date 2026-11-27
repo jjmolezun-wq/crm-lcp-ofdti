@@ -9,13 +9,37 @@ DB_PATH = os.environ.get("CRM_LCP_DB", os.path.join(BASE_DIR, "crm_lcp.db"))
 
 DEFAULT_PARAMS = {
     "nom_organisme": "LCP — Certification OFDTI",
-    "duree_certification_mois": "36",
+    "duree_certification_mois": "60",
+    "delai_recevabilite_jours": "15",
+    "delai_decision_mois": "9",
+    "delai_complement_mois": "4",
     "montant_frais_euros": "1500.00",
     "delai_paiement_jours": "30",
-    "seuils_relance_certificat_jours": "[90, 30, 7]",
+    "seuils_relance_certificat_jours": "[360, 90, 30, 7]",
     "delai_alerte_instruction_jours": "30",
-    "seuil_renouvellement_jours": "90",
+    "seuil_renouvellement_jours": "360",
+    "lieu_edition_certificat": "Pessac",
+    "signataire_certificat": "MOLEZUN Jean-Jacques, Responsable de certification",
+    "email_contact": "ofdti@lcp-certification.fr",
+    "site_web": "https://www.lcp-certification.fr",
+    "marque_couleur": "F0980C",
 }
+
+DOMAINES = [
+    ("amiante_sans", "Amiante sans mention"),
+    ("amiante_avec", "Amiante avec mention"),
+    ("dpe_sans", "DPE sans mention"),
+    ("dpe_avec", "DPE avec mention"),
+    ("electricite", "Électricité"),
+    ("gaz", "Gaz"),
+    ("plomb_sans", "Plomb sans mention"),
+    ("plomb_avec", "Plomb avec mention"),
+    ("termites", "Termites"),
+    ("termites_om", "Termites O-M"),
+    ("audit_energetique", "Audit Énergétique"),
+]
+
+TYPES_FORMATION = ["FIP", "FID", "FCP", "FCD", "FPT"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -131,6 +155,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE TABLE IF NOT EXISTS parametres (
     cle TEXT PRIMARY KEY,
     valeur TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS domaines (
+    code TEXT PRIMARY KEY,
+    libelle TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS signatures (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -253,6 +281,14 @@ def migrate(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(dossiers)").fetchall()}
     if "renouvellement_de" not in cols:
         conn.execute("ALTER TABLE dossiers ADD COLUMN renouvellement_de INTEGER REFERENCES certificats(id)")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(dossiers)").fetchall()}
+    if "domaines" not in cols:
+        conn.execute("ALTER TABLE dossiers ADD COLUMN domaines TEXT")
+    if "types_formation" not in cols:
+        conn.execute("ALTER TABLE dossiers ADD COLUMN types_formation TEXT")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "numero_enregistrement" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN numero_enregistrement TEXT")
 
 
 def seed(conn):
@@ -267,10 +303,12 @@ def seed(conn):
     ]
     for u in users:
         conn.execute(
-            "INSERT INTO users(email, password_hash, nom, role, organisme, siret, adresse, actif, created_at) "
-            "VALUES (?,?,?,?,?,?,?,1,?)",
-            u,
+            "INSERT INTO users(email, password_hash, nom, role, organisme, siret, adresse, numero_enregistrement, actif, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,1,?)",
+            u[:7] + ("11-33-000000-01" if u[4] != "LCP" else "",) + (u[7],),
         )
+    for code, libelle in DOMAINES:
+        conn.execute("INSERT OR IGNORE INTO domaines(code, libelle) VALUES (?, ?)", (code, libelle))
     for cle, valeur in DEFAULT_PARAMS.items():
         set_param(conn, cle, valeur)
 

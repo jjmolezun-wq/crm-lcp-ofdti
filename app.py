@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import os
 import re
 import secrets
@@ -21,8 +22,11 @@ SESSION_COOKIE = "lcp_session"
 BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:8000")
 
 
+DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "documents")
+
+
 def charger_mentions():
-    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "documents", "certificat_mentions.txt")
+    p = os.path.join(DOCS_DIR, "certificat_mentions.txt")
     if os.path.exists(p):
         with open(p) as f:
             return [l.strip() for l in f if l.strip()]
@@ -31,6 +35,33 @@ def charger_mentions():
         "Toute modification du périmètre certifié invalide le présent certificat.",
         "Vérification de l'authenticité en ligne disponible depuis le CRM LCP.",
     ]
+
+
+def contexte_certificat(ctx, cert):
+    d = get_dossier(ctx, cert["dossier_id"])
+    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    domaines_sel = json.loads(d["domaines"]) if d["domaines"] else []
+    types_sel = json.loads(d["types_formation"]) if d["types_formation"] else []
+    domaines_all = [(r["code"], r["libelle"]) for r in ctx.conn.execute("SELECT code, libelle FROM domaines ORDER BY rowid").fetchall()]
+    lieu = db.get_param(ctx.conn, "lieu_edition_certificat", "Pessac")
+    signataire = db.get_param(ctx.conn, "signataire_certificat", "Responsable de certification")
+    return d, candidat, domaines_sel, types_sel, domaines_all, lieu, signataire
+
+
+def portee_dossier(ctx, d):
+    labels = {r["code"]: r["libelle"] for r in ctx.conn.execute("SELECT code, libelle FROM domaines").fetchall()}
+    try:
+        doms = json.loads(d["domaines"]) if d["domaines"] else []
+    except Exception:
+        doms = []
+    try:
+        types = json.loads(d["types_formation"]) if d["types_formation"] else []
+    except Exception:
+        types = []
+    txt = ", ".join(labels.get(c, c) for c in doms)
+    if types:
+        txt = (txt + "  ·  " if txt else "") + ", ".join(types)
+    return txt
 SESSION_DUREE = timedelta(hours=8)
 TAILLE_MAX_PIECE = 10 * 1024 * 1024
 
@@ -94,13 +125,18 @@ class Ctx:
                 self.user = row
         self.csrf = self.session["scsrf"] if self.session else ""
         self.form = {}
+        self.form_list = {}
         self.files = {}
         if method == "POST":
             ct = handler.headers.get("Content-Type", "")
             if ct.startswith("multipart/form-data"):
                 self.form, self.files = parse_multipart(ct, body)
+                self.form_list = {}
+                for k, v in self.form.items():
+                    self.form_list[k] = [v]
             else:
-                self.form = {k: v[0] for k, v in parse_qs(body.decode("utf-8", "replace")).items()}
+                self.form_list = parse_qs(body.decode("utf-8", "replace"))
+                self.form = {k: v[0] for k, v in self.form_list.items()}
 
     def unread(self):
         if not self.user:
@@ -294,20 +330,27 @@ def dossiers_liste(ctx):
 
 @route("GET", r"/dossiers/nouveau", roles=["candidat"])
 def dossier_new_get(ctx):
-    return t.page_dossier_new(ctx.user, ctx.csrf)
+    domaines = [(r["code"], r["libelle"]) for r in ctx.conn.execute("SELECT code, libelle FROM domaines ORDER BY rowid").fetchall()]
+    return t.page_dossier_new(ctx.user, ctx.csrf, domaines, db.TYPES_FORMATION)
 
 
 @route("POST", r"/dossiers", roles=["candidat"])
 def dossier_new_post(ctx):
-    type_service = ctx.form.get("type_service", "").strip()
+    domaines = [(r["code"], r["libelle"]) for r in ctx.conn.execute("SELECT code, libelle FROM domaines ORDER BY rowid").fetchall()]
+    codes_ok = {c for c, _ in domaines}
+    domaines_sel = [c for c in ctx.form_list.get("domaines", []) if c in codes_ok]
+    types_sel = [c for c in ctx.form_list.get("types_formation", []) if c in db.TYPES_FORMATION]
     description = ctx.form.get("description", "").strip()
-    if not type_service or not description:
-        return t.page_dossier_new(ctx.user, ctx.csrf, "Le type de service et la description sont obligatoires.")
+    if not domaines_sel or not description:
+        return t.page_dossier_new(ctx.user, ctx.csrf, domaines, db.TYPES_FORMATION,
+                                  "Sélectionnez au moins un domaine de certification et décrivez la demande.")
+    labels = dict(domaines)
+    type_service = ", ".join(labels.get(c, c) for c in domaines_sel[:3]) + ("…" if len(domaines_sel) > 3 else "")
     numero = db.next_numero(ctx.conn, "DOS", "dossiers", "numero")
     now = db.now()
     cur = ctx.conn.execute(
-        "INSERT INTO dossiers(numero, candidat_id, type_service, description, statut, created_at, updated_at) VALUES (?,?,?,?, 'brouillon', ?, ?)",
-        (numero, ctx.user["id"], type_service, description, now, now),
+        "INSERT INTO dossiers(numero, candidat_id, type_service, description, statut, domaines, types_formation, created_at, updated_at) VALUES (?,?,?,?, 'brouillon', ?,?, ?, ?)",
+        (numero, ctx.user["id"], type_service, description, json.dumps(domaines_sel), json.dumps(types_sel), now, now),
     )
     did = cur.lastrowid
     ctx.conn.execute(
@@ -349,7 +392,7 @@ def dossier_detail(ctx, did):
     trans = transitions_possibles(ctx.user, d)
     msg = ctx.query.get("msg", [""])[0]
     erreur = ctx.query.get("erreur", [""])[0]
-    return t.page_dossier_detail(ctx.user, d, hist, pieces, commentaires, users, cert, facture, trans, ctx.csrf, msg=msg, erreur=erreur)
+    return t.page_dossier_detail(ctx.user, d, hist, pieces, commentaires, users, cert, facture, trans, ctx.csrf, msg=msg, erreur=erreur, portee=portee_dossier(ctx, d))
 
 
 @route("POST", r"/dossiers/(\d+)/statut", roles=["admin", "auditeur", "candidat"])
@@ -739,10 +782,10 @@ def certificat_pdf(ctx, cid):
     d = get_dossier(ctx, cert["dossier_id"])
     if not d or not verifier_acces_dossier(ctx, d):
         return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
-    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    d, candidat, dom_sel, typ_sel, dom_all, lieu, signataire = contexte_certificat(ctx, cert)
     signe_at = db.now()
     pdf_bytes, pdf_hash, sig_hex, fp = pdfgen.certificat_pdf_signe(
-        cert, d, candidat, charger_mentions(), BASE_URL, signe_at)
+        cert, d, candidat, charger_mentions(), dom_sel, typ_sel, dom_all, lieu, signataire, BASE_URL, signe_at)
     ctx.conn.execute(
         "INSERT INTO signatures(certificat_id, pdf_hash, signature, key_fingerprint, signe_at) VALUES (?,?,?,?,?) "
         "ON CONFLICT(certificat_id) DO UPDATE SET pdf_hash=excluded.pdf_hash, signature=excluded.signature, "
@@ -764,10 +807,10 @@ def certificat_verify(ctx, cid):
     d = get_dossier(ctx, cert["dossier_id"])
     if not d or not verifier_acces_dossier(ctx, d):
         return t.page_erreur(ctx.user, "Accès refusé.", "Accès refusé"), 403
-    candidat = ctx.conn.execute("SELECT * FROM users WHERE id = ?", (d["candidat_id"],)).fetchone()
+    d, candidat, dom_sel, typ_sel, dom_all, lieu, signataire = contexte_certificat(ctx, cert)
     sig = ctx.conn.execute("SELECT * FROM signatures WHERE certificat_id = ?", (cert["id"],)).fetchone()
     _, pub = pdfgen.get_keys()
-    unsigned = pdfgen.certificat_pdf_unsigned(cert, d, candidat, charger_mentions())
+    unsigned = pdfgen.certificat_pdf_unsigned(cert, d, candidat, charger_mentions(), dom_sel, typ_sel, dom_all, lieu, signataire)
     hash_now = hashlib.sha256(unsigned).hexdigest()
     if sig:
         ok = pdfgen.verifier_hash(unsigned, sig["signature"], pub) and hash_now == sig["pdf_hash"]
@@ -888,6 +931,28 @@ def stats(ctx):
         "factures": charts.donut(data_factures),
     }
     return t.page_stats(ctx.user, kpis, charts_html)
+
+
+@route("GET", r"/documents")
+def documents_liste(ctx):
+    fichiers = sorted(os.listdir(DOCS_DIR))
+    return t.page_documents(ctx.user, fichiers)
+
+
+@route("GET", r"/documents/([^/]+)")
+def document_download(ctx, name):
+    name = os.path.basename(name)
+    p = os.path.join(DOCS_DIR, name)
+    if not os.path.isfile(p):
+        return t.page_erreur(ctx.user, "Document introuvable.", "404"), 404
+    ctype = {
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".txt": "text/plain; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+    }.get(os.path.splitext(name)[1].lower(), "application/octet-stream")
+    with open(p, "rb") as f:
+        data = f.read()
+    respond(ctx, data, ctype=ctype, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @route("GET", r"/health", roles=None, csrf=False)

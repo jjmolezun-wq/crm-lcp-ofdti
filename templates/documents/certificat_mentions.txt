@@ -1,5 +1,5 @@
-Certificat délivré conformément au référentiel OFDTI en vigueur à la date de délivrance.
-Toute modification du périmètre certifié (services, sites, effectifs couverts) invalide le présent certificat.
-La certification est soumise à des audits de surveillance périodiques ; en cas de non-conformité majeure, le certificat peut être suspendu ou retiré.
-L'authenticité de ce document est vérifiable en ligne depuis le CRM LCP (page de vérification de la signature électronique).
-Remplacez ce fichier par vos mentions légales officielles (modèle de certificat fourni par LCP).
+A été jugé conforme au regard des textes suivants : Arrêté du 20 juillet 2023, Décret n°2023-1219 du 20 décembre 2023, Arrêté du 1er juillet 2024, Arrêté du 16 juin 2025 modifiant l'arrêté du 20 juillet 2023 et modifiant l'arrêté du 24 décembre 2021, Arrêté du 30 juin 2025 modifiant l'arrêté du 20 juillet 2023.
+Référentiels : norme EN ISO/IEC 17065:2012 et CERT CPS REF 45 (exigences spécifiques pour l'accréditation des organismes de certification des organismes de formation des opérateurs de diagnostic technique immobilier).
+Cycle de certification : 5 ans (60 mois). Des audits de surveillance sont réalisés entre le 12e et le 48e mois suivant la date d'obtention de la certification. Le renouvellement (documentaire + observations) intervient entre le 48e mois et la date d'expiration du certificat.
+En cas de non-conformité majeure, le certificat peut être suspendu ou retiré. Toute modification de la portée de certification (domaines, types de formation, sites) invalide le présent certificat.
+Ce certificat est émis pour servir et valoir ce que de droit.

@@ -32,6 +32,10 @@ def post(op, path, data):
     return op.open(BASE + path, urllib.parse.urlencode(data).encode(), timeout=10)
 
 
+def post_multi(op, path, pairs):
+    return op.open(BASE + path, urllib.parse.urlencode(pairs).encode(), timeout=10)
+
+
 def csrf_of(html_text):
     m = re.search(r'name="csrf" value="([^"]+)"', html_text)
     return m.group(1) if m else ""
@@ -64,7 +68,9 @@ def main():
         csrf = csrf_of(get(cand, "/dossiers/nouveau").read().decode("utf-8"))
         check("csrf présent", bool(csrf))
 
-        r = post(cand, "/dossiers", {"csrf": csrf, "type_service": "ServiceTestXYZ", "description": "Dossier de test automatisé OFDTI."})
+        r = post_multi(cand, "/dossiers", [("csrf", csrf), ("domaines", "dpe_sans"), ("domaines", "gaz"),
+                                            ("types_formation", "FIP"), ("types_formation", "FCP"),
+                                            ("description", "Dossier de test automatisé OFDTI.")])
         body = r.read().decode("utf-8")
         m = re.search(r"DOS-\d{4}-\d{4}", body)
         check("création dossier", bool(m), body[:200])
@@ -77,7 +83,8 @@ def main():
         csrf = csrf_of(page)
         post(cand, f"/dossiers/{did}/statut", {"csrf": csrf, "statut": "depose", "commentaire": "Dépôt initial"})
         page = get(cand, f"/dossiers/{did}").read().decode("utf-8")
-        check("statut déposé", "Déposé" in page)
+        check("statut déposé", "posée" in page.lower())
+        check("portée affichée (domaines)", "DPE sans mention" in page and "Gaz" in page)
 
         bad = make_opener()
         login(bad, "candidat@exemple.fr", "demo123")
@@ -90,7 +97,7 @@ def main():
         admin = make_opener()
         page = login(admin, "admin@lcp.fr", "admin123")
         csrf = csrf_of(get(admin, "/admin/users").read().decode("utf-8"))
-        for statut in ("en_instruction", "en_audit", "certifie"):
+        for statut in ("en_recevabilite", "recevable", "en_audit", "certifie"):
             post(admin, f"/dossiers/{did}/statut", {"csrf": csrf, "statut": statut, "commentaire": f"vers {statut}"})
         page = get(admin, f"/dossiers/{did}").read().decode("utf-8")
         check("dossier certifié", "Certifié OFDTI" in page)
@@ -108,6 +115,8 @@ def main():
             r = get(admin, f"/certificats/{cid}/pdf")
             pdfb = r.read()
             check("PDF signé généré", r.status == 200 and pdfb.startswith(b"%PDF") and "pdf" in (r.headers.get("Content-Type") or ""))
+            check("PDF conforme au modèle OFDTI (titre, domaines, types)",
+                  b"Certificat OFDTI" in pdfb and b"DPE sans mention" in pdfb and b"FIP" in pdfb and b"Pessac" in pdfb)
             ver = get(admin, f"/certificats/{cid}/verify").read().decode("utf-8")
             check("vérification signature RSA valide", "signature valide" in ver)
             pub = get(admin, "/api/pubkey").read().decode("utf-8")
@@ -121,6 +130,8 @@ def main():
         check("dossier de renouvellement auto créé", "Renouvellement" in dos)
         outbox2 = get(admin, "/admin/outbox").read().decode("utf-8")
         check("outbox: e-mails simulés sans SMTP", "simulé" in outbox2)
+        docs = get(admin, "/documents").read().decode("utf-8")
+        check("page documents de référence (procédure V016, modèle certificat)", "Procedure_certification_OFDTI_V016.docx" in docs and "Modele_certificat_OFDTI_V007.docx" in docs)
 
         mcert = re.search(r"/certificats/(\d+)/print", get(cand, "/certificats").read().decode("utf-8"))
         if mcert:

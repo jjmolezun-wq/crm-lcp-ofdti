@@ -14,10 +14,10 @@ MAIN_X = (W - MAIN_W) // 2
 FONT = "Segoe UI, Roboto, Helvetica, Arial, sans-serif"
 
 C = {
-    "bg": "#f4f6fa", "header": "#14304f", "nav": "#d7e3f4", "brand": "#ffffff",
-    "brand2": "#7fb3ff", "text": "#1c2733", "muted": "#5b6b7c", "link": "#1668c4",
+    "bg": "#f4f6fa", "header": "#F0980C", "nav": "#4a3400", "brand": "#2b1d00",
+    "brand2": "#7a4d00", "text": "#1c2733", "muted": "#5b6b7c", "link": "#b06f00",
     "card": "#ffffff", "border": "#e2e8f0", "rowline": "#e8edf3",
-    "input_border": "#c9d4e0", "btn": "#1668c4", "btn2": "#e8edf3",
+    "input_border": "#c9d4e0", "btn": "#F0980C", "btn2": "#e8edf3",
     "flash_bg": "#dcf5e3", "flash_bd": "#9edcb4", "flash_tx": "#177245",
     "err_bg": "#fde2e2", "err_bd": "#f3b6b6", "err_tx": "#b3261e",
     "badge": {"ok": ("#dcf5e3", "#177245"), "warn": ("#fdf0d3", "#9a6a00"),
@@ -79,7 +79,7 @@ class Canvas:
 
     def pill_btn(self, x, y, label, primary=True):
         bg = C["btn"] if primary else C["btn2"]
-        fg = "#ffffff" if primary else C["text"]
+        fg = "#2b1d00" if primary else C["text"]
         w = tw(label, 14) + 28
         self.rect(x, y - 16, w, 30, bg, rx=7)
         self.text(x + 14, y + 4, label, size=14, fill=fg, weight="bold")
@@ -321,7 +321,7 @@ def render_certificat(el, cv, x, y, w):
     svc = svc.split("service :")[-1].strip() if "service :" in svc else ""
     rows = [tr.get_text(" ", strip=True) for tr in el.find_all("tr")]
     h = 560
-    cv.rect(x + 60, y, w - 120, h, "#ffffff", stroke="#14304f", rx=4, sw=3)
+    cv.rect(x + 60, y, w - 120, h, "#ffffff", stroke="#F0980C", rx=4, sw=3)
     cx = x + w / 2
     yy = y + 60
     cv.text(cx, yy, titre, size=26, weight="bold", anchor="middle")
@@ -421,7 +421,7 @@ def render_page(html_str, out_path):
                 nx += tw(t, 14) + 24
         user = header.find("span", class_="user")
         if user:
-            cv2.text(W - 24, 34, user.get_text(" ", strip=True), size=13, fill="#bcd2ee", anchor="end")
+            cv2.text(W - 24, 34, user.get_text(" ", strip=True), size=13, fill="#4a3400", anchor="end")
         y2 = 80
     else:
         y2 = 40
