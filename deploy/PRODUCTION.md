@@ -1,5 +1,9 @@
 # Mise en production réelle (checklist)
 
+> Pour un déploiement guidé pas à pas sur **Infomaniak Public Cloud**
+> (sous-domaine `lcpofdti.lcp-certification.fr`, VPS, DNS, SMTP, HTTPS) :
+> voir **[INFOMANIAK.md](INFOMANIAK.md)**.
+
 ## 0. Ce que fait ce pack
 
 - `deploy.sh <tag>` : sauvegarde + checkout du tag + migrations + restart + healthcheck

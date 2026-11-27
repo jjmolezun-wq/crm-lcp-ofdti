@@ -143,6 +143,8 @@ Le workflow du CRM reprend la procédure fournie (`templates/documents/Procedure
   `docker-compose.yml` + Caddy (HTTPS automatique Let's Encrypt), unité systemd, `.env.example`
   (BASE_URL, SMTP_*). Garde-fou : `--reset` refusé si `CRM_LCP_PROD=1`. Checklist complète (DNS, pare-feu,
   changement des mots de passe démo, cron de sauvegarde, RGPD) dans `deploy/PRODUCTION.md`.
+  **Déploiement guidé pas à pas sur Infomaniak Public Cloud** (VPS `lcpofdti.lcp-certification.fr`,
+  DNS, SMTP Infomaniak, HTTPS automatique, sauvegardes) : [`deploy/INFOMANIAK.md`](deploy/INFOMANIAK.md).
 
 ## Modèle de données (SQLite)
 
