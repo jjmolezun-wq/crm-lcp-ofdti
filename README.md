@@ -29,10 +29,11 @@ Comptes de démonstration :
 python3 tests.py   # démarre une instance isolée et joue 20 scénarios de bout en bout
 ```
 
-## Visuels (captures d'écran SVG des vrais écrans)
+## Visuels (captures d'écran PNG des vrais écrans — s'affichent directement dans ce README)
 
 Régénération : lancer l'app, capturer les pages HTML, puis
-`python3 tools/render_screenshots.py <dossier_pages_html> docs/screenshots`.
+`python3 tools/render_screenshots.py <dossier_pages_html> docs/screenshots` (SVG)
+puis `python3 tools/svg2png.py docs/screenshots` (PNG).
 
 - [01 — Connexion](docs/screenshots/01-connexion.png)
 - [02 — Tableau de bord admin](docs/screenshots/02-tableau-de-bord-admin.png)

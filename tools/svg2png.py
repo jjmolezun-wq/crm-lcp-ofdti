@@ -133,12 +133,17 @@ def glyph(ch):
     return F.get(norm(ch), F.get(ch.upper(), F["?"]))
 
 
+SS = 3  # sur-échantillonnage : le rendu se fait à SCALE*SS puis est moyenné (anti-crénelage)
+
+from operator import add as _add
+
+
 class Img:
     def __init__(self, w, h, bg=(255, 255, 255)):
-        self.w, self.h = w, h
+        self.w, self.h = int(w), int(h)
+        row = bytes(bg) * self.w
         self.px = bytearray()
-        row = bytes(bg) * w
-        for _ in range(h):
+        for _ in range(self.h):
             self.px += row
 
     def _set(self, x, y, c):
@@ -146,21 +151,26 @@ class Img:
             i = (y * self.w + x) * 3
             self.px[i:i + 3] = bytes(c)
 
+    def _fill(self, x, y, w, h, c):
+        x0, y0 = max(int(x), 0), max(int(y), 0)
+        x1, y1 = min(int(x + w), self.w), min(int(y + h), self.h)
+        if x1 <= x0 or y1 <= y0:
+            return
+        row = bytes(c) * (x1 - x0)
+        span = (x1 - x0) * 3
+        for yy in range(y0, y1):
+            base = (yy * self.w + x0) * 3
+            self.px[base:base + span] = row
+
     def rect(self, x, y, w, h, fill=None, stroke=None, sw=1):
-        x, y, w, h = int(x), int(y), int(w), int(h)
         if fill:
-            for yy in range(y, y + h):
-                for xx in range(x, x + w):
-                    self._set(xx, yy, fill)
+            self._fill(x, y, w, h, fill)
         if stroke:
-            for xx in range(x, x + w):
-                for t in range(sw):
-                    self._set(xx, y + t, stroke)
-                    self._set(xx, y + h - 1 - t, stroke)
-            for yy in range(y, y + h):
-                for t in range(sw):
-                    self._set(x + t, yy, stroke)
-                    self._set(x + w - 1 - t, yy, stroke)
+            sw = max(1, int(sw))
+            self._fill(x, y, w, sw, stroke)
+            self._fill(x, y + h - sw, w, sw, stroke)
+            self._fill(x, y, sw, h, stroke)
+            self._fill(x + w - sw, y, sw, h, stroke)
 
     def line(self, x1, y1, x2, y2, color, sw=1):
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
@@ -168,9 +178,11 @@ class Img:
         sx = 1 if x1 < x2 else -1
         sy = 1 if y1 < y2 else -1
         err = dx + dy
+        sw = max(1, int(sw))
         while True:
-            for t in range(sw):
-                self._set(x1 + t, y1 + t, color)
+            for t1 in range(sw):
+                for t2 in range(sw):
+                    self._set(x1 + t1, y1 + t2, color)
             if x1 == x2 and y1 == y2:
                 break
             e2 = 2 * err
@@ -181,9 +193,32 @@ class Img:
                 err += dx
                 y1 += sy
 
-    def text(self, x, y, s, size, fill, anchor="start", bold=False):
-        scale = max(1, round(size * SCALE / 7))
-        cw = 5 * scale + scale
+    _runs_cache = {}
+
+    def _glyph_runs(self, ch, scale):
+        key = (ch, scale)
+        runs = self._runs_cache.get(key)
+        if runs is None:
+            g = glyph(ch)
+            runs = []
+            for r in range(7):
+                row = g[r] if r < len(g) else ""
+                c = 0
+                while c < 5:
+                    if c < len(row) and row[c] == "#":
+                        c0 = c
+                        while c < len(row) and row[c] == "#":
+                            c += 1
+                        runs.append((r, c0, c))
+                    else:
+                        c += 1
+            self._runs_cache[key] = runs
+        return runs
+
+    def text(self, x, y, s, size, fill, anchor="start"):
+        # size : hauteur de police en pixels du buffer de rendu (SVG * SCALE * SS)
+        scale = max(1, round(size / 7.0))
+        cw = 6 * scale
         total = cw * len(s)
         x = int(x)
         y = int(y)
@@ -191,15 +226,21 @@ class Img:
             x -= total // 2
         elif anchor == "end":
             x -= total
+        frow = bytes(fill)
         for ch in s:
-            g = glyph(ch)
-            for r in range(7):
-                row = g[r] if r < len(g) else ""
-                for c in range(5):
-                    if c < len(row) and row[c] == "#":
-                        for sy in range(scale):
-                            for sx in range(scale):
-                                self._set(x + c * scale + sx, y + r * scale + sy, fill)
+            for (r, c0, c1) in self._glyph_runs(ch, scale):
+                runw = (c1 - c0) * scale
+                row = frow * runw
+                x0 = x + c0 * scale
+                if x0 < 0:
+                    continue
+                for dy in range(scale):
+                    yy = y + r * scale + dy
+                    if 0 <= yy < self.h:
+                        base = (yy * self.w + x0) * 3
+                        end = base + runw * 3
+                        if end <= len(self.px):
+                            self.px[base:end] = row
             x += cw
 
     def save_png(self, path):
@@ -219,6 +260,31 @@ class Img:
             f.write(png)
 
 
+def downsample(px, w, h, s):
+    """Moyenne par blocs s x s (par canal) : anti-crénelage du rendu sur-échantillonné."""
+    ow, oh = w // s, h // s
+    out = bytearray(ow * oh * 3)
+    div = (s * s).__rfloordiv__
+    for c in range(3):
+        ch = bytes(px[c::3])
+        for rp in range(oh):
+            acc = None
+            for k in range(s):
+                row = ch[(rp * s + k) * w:(rp * s + k + 1) * w]
+                hsum = row[0::s]
+                for i in range(1, s):
+                    hsum = map(_add, hsum, row[i::s])
+                acc = hsum if acc is None else map(_add, acc, hsum)
+            start = rp * ow * 3 + c
+            out[start:start + (ow - 1) * 3 + 1:3] = bytes(map(div, acc))
+    return out
+
+
+def _num(v, default=0.0):
+    m = re.match(r"[-+]?[0-9]*\.?[0-9]+", v or "")
+    return float(m.group()) if m else default
+
+
 def parse_color(v, default=(28, 39, 51)):
     if not v or v == "none":
         return None
@@ -235,40 +301,40 @@ def parse_color(v, default=(28, 39, 51)):
 def render_svg(svg_path, png_path):
     tree = ET.parse(svg_path)
     root = tree.getroot()
-    W = int(float(root.get("width")))
-    H = int(float(root.get("height")))
-    img = Img(W * SCALE, H * SCALE)
+    W = int(_num(root.get("width")))
+    H = int(_num(root.get("height")))
+    R = SCALE * SS
+    img = Img(W * R, H * R)
 
     def walk(el, ox, oy):
         for child in el:
             tag = child.tag.replace(SVGNS, "")
-            x = ox + float(child.get("x", 0) or 0)
-            y = oy + float(child.get("y", 0) or 0)
+            x = ox + _num(child.get("x"))
+            y = oy + _num(child.get("y"))
             if tag == "rect":
-                img.rect(x * SCALE, y * SCALE, float(child.get("width")) * SCALE, float(child.get("height")) * SCALE,
+                img.rect(x * R, y * R, _num(child.get("width")) * R, _num(child.get("height")) * R,
                          fill=parse_color(child.get("fill")), stroke=parse_color(child.get("stroke")),
-                         sw=max(1, int(float(child.get("stroke-width", 1)) * SCALE)))
+                         sw=max(1, int(_num(child.get("stroke-width", "1")) * R)))
             elif tag == "line":
-                img.line(float(child.get("x1")) * SCALE + ox * SCALE, float(child.get("y1")) * SCALE + oy * SCALE,
-                         float(child.get("x2")) * SCALE + ox * SCALE, float(child.get("y2")) * SCALE + oy * SCALE,
-                         parse_color(child.get("stroke"), (200, 200, 200)), sw=max(1, int(float(child.get("stroke-width", 1)) * SCALE)))
+                img.line((ox + _num(child.get("x1"))) * R, (oy + _num(child.get("y1"))) * R,
+                         (ox + _num(child.get("x2"))) * R, (oy + _num(child.get("y2"))) * R,
+                         parse_color(child.get("stroke"), (200, 200, 200)),
+                         sw=max(1, int(_num(child.get("stroke-width", "1")) * R)))
             elif tag == "path":
                 pass  # camemberts : ignorés en PNG (les barres suffisent)
             elif tag == "text":
-                size = float(child.get("font-size", 14))
+                size = _num(child.get("font-size"), 14)
                 content = "".join(child.itertext())
-                img.text(x * SCALE, (y - size * 0.8) * SCALE, content, size * SCALE,
+                img.text(x * R, (y - size * 0.8) * R, content, size * R,
                          parse_color(child.get("fill"), (28, 39, 51)),
                          anchor=child.get("text-anchor", "start"))
-            elif tag == "svg":
-                walk(child, x, y)
-            elif tag == "g":
-                walk(child, ox, oy)
             else:
-                walk(child, ox, oy)
+                walk(child, x, y)
 
     walk(root, 0, 0)
-    img.save_png(png_path)
+    out = Img(W * SCALE, H * SCALE)
+    out.px = downsample(img.px, img.w, img.h, SS)
+    out.save_png(png_path)
     return W, H
 
 
