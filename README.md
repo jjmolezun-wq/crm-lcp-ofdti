@@ -146,6 +146,27 @@ Le workflow du CRM reprend la procédure fournie (`templates/documents/Procedure
   **Déploiement guidé pas à pas sur Infomaniak Public Cloud** (VPS `lcp-certification-ofdti.fr`,
   DNS, SMTP Infomaniak, HTTPS automatique, sauvegardes) : [`deploy/INFOMANIAK.md`](deploy/INFOMANIAK.md).
 
+### Intégration avec le site existant — page `ofdti.html`
+
+Le CRM expose une **inscription publique** `GET/POST /inscription` (crée le compte candidat,
+ouvre automatiquement un dossier brouillon, notifie l'admin par notification + e-mail) et la
+connexion `/login` (qui comporte désormais un lien « créer un compte »).
+Sur `https://www.lcp-certification.fr/ofdti.html`, prévoir 2 boutons vers le CRM hébergé sur
+`lcp-certification-ofdti.fr` (couleur marque `#F0980C`) :
+
+```html
+<!-- ofdti.html : 2 boutons vers le CRM OFDTI -->
+<div style="text-align:center;padding:40px;font-family:Arial,sans-serif">
+  <h1 style="color:#F0980C">Certification OFDTI — Espace organisme de formation</h1>
+  <p>
+    <a href="https://lcp-certification-ofdti.fr/inscription"
+       style="display:inline-block;background:#F0980C;color:#fff;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:bold;margin:8px">Créer un compte</a>
+    <a href="https://lcp-certification-ofdti.fr/login"
+       style="display:inline-block;border:2px solid #F0980C;color:#F0980C;padding:12px 26px;border-radius:6px;text-decoration:none;font-weight:bold;margin:8px">Se connecter</a>
+  </p>
+</div>
+```
+
 ## Modèle de données (SQLite)
 
 `users`, `sessions`, `dossiers`, `historique`, `pieces`, `commentaires`, `certificats`,

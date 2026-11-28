@@ -126,8 +126,25 @@ def page_login(error=None):
 <label>Email</label><input type="email" name="email" required autofocus>
 <label>Mot de passe</label><input type="password" name="password" required>
 <div style="margin-top:14px"><button class="btn" type="submit">Se connecter</button></div>
-</form><p class="muted">Comptes de démonstration : admin@lcp.fr / admin123 · auditeur@lcp.fr / audit123 · candidat@exemple.fr / demo123</p></div>"""
+</form><p class="muted">Organisme de formation : <a href="/inscription">créer un compte</a></p><p class="muted">Comptes de démonstration : admin@lcp.fr / admin123 · auditeur@lcp.fr / audit123 · candidat@exemple.fr / demo123</p></div>"""
     return layout(None, "Connexion", body)
+
+
+def page_inscription(error=None):
+    err = f'<div class="erreur">{esc(error)}</div>' if error else ""
+    body = f"""
+<div class="card login-box"><h1>Créer un compte OF</h1>
+<p class="muted">Réservé aux organismes de formation candidats à la certification OFDTI.</p>{err}
+<form method="post" action="/inscription">
+<label>Raison sociale de l'organisme *</label><input name="organisme" required autofocus>
+<label>Nom du responsable *</label><input name="nom" required>
+<label>E-mail professionnel *</label><input type="email" name="email" required>
+<label>SIRET</label><input name="siret" maxlength="14" placeholder="14 chiffres">
+<label>Mot de passe (8 caractères min.) *</label><input type="password" name="password" required minlength="8">
+<label>Confirmer le mot de passe *</label><input type="password" name="password2" required minlength="8">
+<div style="margin-top:14px"><button class="btn" type="submit">Créer mon compte</button></div>
+</form><p class="muted">Déjà un compte ? <a href="/login">Se connecter</a></p></div>"""
+    return layout(None, "Inscription OFDTI", body)
 
 
 def page_dashboard(user, stats, dossiers_recents, alertes, mes_dossiers=None, mes_factures=None, mes_certs=None):

@@ -238,6 +238,67 @@ def login_post(ctx):
              headers={"Set-Cookie": f"{SESSION_COOKIE}={token}; HttpOnly; Path=/; SameSite=Lax"})
 
 
+@route("GET", r"/inscription", roles=None, csrf=False)
+def inscription_get(ctx):
+    if ctx.user:
+        redirect(ctx, "/")
+        return
+    return t.page_inscription()
+
+
+@route("POST", r"/inscription", roles=None, csrf=False)
+def inscription_post(ctx):
+    organisme = ctx.form.get("organisme", "").strip()
+    nom = ctx.form.get("nom", "").strip()
+    email = ctx.form.get("email", "").strip().lower()
+    siret = ctx.form.get("siret", "").strip()
+    password = ctx.form.get("password", "")
+    password2 = ctx.form.get("password2", "")
+    if not organisme or not nom or "@" not in email:
+        return t.page_inscription("Organisme, nom du responsable et e-mail valide requis.")
+    if len(password) < 8:
+        return t.page_inscription("Mot de passe trop court (8 caractères minimum).")
+    if password != password2:
+        return t.page_inscription("Les deux mots de passe ne correspondent pas.")
+    try:
+        cur = ctx.conn.execute(
+            "INSERT INTO users(email, password_hash, nom, role, organisme, siret, actif, created_at) VALUES (?,?,?,'candidat',?,?,1,?)",
+            (email, db.hash_password(password), nom, organisme, siret, db.now()),
+        )
+    except Exception:
+        ctx.conn.rollback()
+        return t.page_inscription("Cet e-mail est déjà utilisé — connectez-vous.")
+    uid = cur.lastrowid
+    numero = db.next_numero(ctx.conn, "DOS", "dossiers", "numero")
+    now = db.now()
+    curd = ctx.conn.execute(
+        "INSERT INTO dossiers(numero, candidat_id, type_service, description, statut, domaines, types_formation, created_at, updated_at) "
+        "VALUES (?,?,?,?,'brouillon','[]','[]',?,?)",
+        (numero, uid, "Demande de certification OFDTI", "Dossier ouvert à l'inscription — en attente de la demande signée (V0010).", now, now),
+    )
+    did = curd.lastrowid
+    ctx.conn.execute(
+        "INSERT INTO historique(dossier_id, ancien, nouveau, acteur_id, commentaire, at) VALUES (?,?,?,?,?,?)",
+        (did, None, "brouillon", uid, "Création du compte et du dossier (inscription OFDTI)", now),
+    )
+    db.audit(ctx.conn, uid, "inscription", "user", uid, email)
+    db.notify_role(ctx.conn, "admin", "inscription", f"Nouveau compte OF : {organisme}",
+                   f"{nom} ({email}, SIRET {siret or '—'}) a créé un compte organisme de formation. Dossier {numero} ouvert en brouillon.",
+                   lien=f"/dossiers/{did}", cle=f"insc:{uid}")
+    db.send_email(ctx.conn, email, "[LCP] Votre compte CRM OFDTI est créé",
+                  f"Bonjour {nom},\n\nVotre compte {email} sur le CRM LCP — Certification OFDTI est actif.\nDossier ouvert : {numero} (brouillon).\n\nLCP — Certification OFDTI",
+                  dossier_id=did)
+    token = secrets.token_urlsafe(32)
+    csrf_token = secrets.token_urlsafe(16)
+    ctx.conn.execute(
+        "INSERT INTO sessions(token, user_id, csrf, created_at, expires_at) VALUES (?,?,?,?,?)",
+        (token, uid, csrf_token, db.now(), db.iso(db.utcnow() + SESSION_DUREE)),
+    )
+    ctx.conn.commit()
+    redirect(ctx, "/?msg=Compte créé, bienvenue dans le CRM OFDTI",
+             headers={"Set-Cookie": f"{SESSION_COOKIE}={token}; HttpOnly; Path=/; SameSite=Lax"})
+
+
 @route("GET", r"/logout", roles=None, csrf=False)
 def logout(ctx):
     token = ctx.cookies.get(SESSION_COOKIE)

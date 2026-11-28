@@ -252,6 +252,23 @@ def main():
         page = get(cand, "/dossiers").read().decode("utf-8")
         check("liste dossiers candidat", numero in page)
 
+        anonyme = make_opener()
+        page = get(anonyme, "/inscription").read().decode("utf-8")
+        check("page inscription publique", "Créer un compte OF" in page and 'action="/inscription"' in page)
+        page = get(anonyme, "/login").read().decode("utf-8")
+        check("lien créer un compte sur /login", "/inscription" in page)
+        r = post(anonyme, "/inscription", {"organisme": "OF Test Inscription", "nom": "Test Insc", "email": "insc@test.fr", "siret": "12345678900012", "password": "motdepasse123", "password2": "motdepasse123"})
+        html = r.read().decode("utf-8")
+        check("inscription connecte automatiquement", "Déconnexion" in html and "Tableau de bord" in html)
+        page = get(anonyme, "/dossiers").read().decode("utf-8")
+        check("dossier brouillon auto à l'inscription", "Demande de certification OFDTI" in page)
+        r = post(make_opener(), "/inscription", {"organisme": "X", "nom": "Y", "email": "insc@test.fr", "password": "motdepasse123", "password2": "motdepasse123"})
+        check("e-mail déjà utilisé refusé", "déjà utilisé" in r.read().decode("utf-8"))
+        r = post(make_opener(), "/inscription", {"organisme": "X", "nom": "Y", "email": "autre@test.fr", "password": "motdepasse123", "password2": "different1"})
+        check("mots de passe différents refusés", "ne correspondent pas" in r.read().decode("utf-8"))
+        r = post(make_opener(), "/inscription", {"organisme": "X", "nom": "Y", "email": "court@test.fr", "password": "court", "password2": "court"})
+        check("mot de passe trop court refusé", "8 caractères" in r.read().decode("utf-8"))
+
     finally:
         proc.terminate()
         try:
