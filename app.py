@@ -1425,6 +1425,7 @@ def document_download(ctx, name):
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".txt": "text/plain; charset=utf-8",
         ".md": "text/markdown; charset=utf-8",
+        ".pdf": "application/pdf",
     }.get(os.path.splitext(name)[1].lower(), "application/octet-stream")
     with open(p, "rb") as f:
         data = f.read()

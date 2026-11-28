@@ -98,7 +98,28 @@ Le workflow du CRM reprend la procédure fournie (`templates/documents/Procedure
   formations, arrêtés cités, « Édien à Pessac, par le Responsable de certification » — tous ces éléments sont
   des paramètres admin) et est **signé électroniquement (RSA-2048)** avec vérification en ligne.
 - **Documents de référence** servis par l'app : page `/documents` (procédure V016, modèle de certificat,
-  mentions légales `certificat_mentions.txt` à remplacer par vos textes officiels).
+  mentions légales `certificat_mentions.txt` à remplacer par vos textes officiels, **Manuel Qualité OFDTI V014**
+  `Manuel_qualite_OFDTI_V014.pdf` servi tel quel en PDF).
+- **Manuel Qualité V014** (`templates/documents/Manuel_qualite_OFDTI_V014.pdf`) — les exigences mesurables
+  qu'il contient sont intégrées au CRM :
+  - **Identité légale LCP** en paramètres admin : SAS au capital de 15 000 €, SIRET 80914919800040,
+    RCS Bordeaux 809 149 198, APE 7120B, siège 30 avenue de Canteranne 33600 Pessac (`siret_lcp`, `rcs_lcp`,
+    `code_ape_lcp`, `capital_lcp`) ; Responsable Qualité `AJAKANE Noureddine` (`responsable_qualite`),
+    Directrice adjointe OFDTI `MOLEZUN Sarah` (`directrice_ofdti`).
+  - **Décision de certification (§7.8–7.9)** : revue par le Comité Technique puis décision du CDC
+    (Comité de Décision de Certification), au plus tard **9 mois** après la notification de recevabilité
+    positive (alerte auto `delai_decision_mois=9`), communiquée à l'OF sous **15 jours ouvrés**
+    (`delai_notification_decision_jours_ouvres=15`). L'enregistrement formel de la décision CDC
+    (membres, avis, courrier) est la prochaine brique prévue.
+  - **Surveillance (§7.12)** : audit de surveillance **entre le début de la 2e année et la fin de la 4e année**
+    (fenêtre 24–48 mois : `surveillance_debut_mois`/`surveillance_fin_mois`) — **alerte automatique** admin +
+    candidat + e-mail dès l'entrée dans la fenêtre (audit aléatoire, observation d'une session de formation
+    en temps réel).
+  - **Rapport annuel au ministère (§4.7)** : avant le **31 mars** (`echeance_rapport_annuel_ministere`) —
+    liste des OF certifiés, flux de surveillance/décisions, bilan des réclamations ; export via `/exports/certifies.csv`.
+  - **Annuaire public (§7.11)** : liste des OF certifiés/reçevables tenue à jour (page `/certificats` + exports CSV).
+  - **Plaintes et appels (§7.17)** : procédure dédiée — en attente de votre document de procédure pour
+    construire le module réclamations/appels.
 
 ## Fonctionnalités du prototype
 

@@ -26,6 +26,16 @@ DEFAULT_PARAMS = {
     "adresse_lcp": "L.C.P Certification — 30, avenue de Canteranne – 33600 PESSAC",
     "tel_lcp": "05.33.89.39.30",
     "marque_couleur": "F0980C",
+    "siret_lcp": "80914919800040",
+    "rcs_lcp": "RCS Bordeaux 809 149 198",
+    "code_ape_lcp": "7120B",
+    "capital_lcp": "15 000 €",
+    "responsable_qualite": "AJAKANE Noureddine",
+    "directrice_ofdti": "MOLEZUN Sarah",
+    "delai_notification_decision_jours_ouvres": "15",
+    "surveillance_debut_mois": "24",
+    "surveillance_fin_mois": "48",
+    "echeance_rapport_annuel_ministere": "31 mars",
 }
 
 DOMAINES = [
@@ -315,6 +325,8 @@ def migrate(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(pieces)").fetchall()}
     if "categorie" not in cols:
         conn.execute("ALTER TABLE pieces ADD COLUMN categorie TEXT DEFAULT 'autre'")
+    for cle, valeur in DEFAULT_PARAMS.items():
+        conn.execute("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES (?,?)", (cle, valeur))
 
 
 def seed(conn):

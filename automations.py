@@ -8,7 +8,7 @@ import db
 def run_automations(conn):
     result = {"factures_en_retard": 0, "relances": 0, "alertes_expiration": 0, "alertes_instruction": 0,
               "certificats_expires": 0, "renouvellements": 0, "recevabilite_hors_delai": 0,
-              "decision_hors_delai": 0, "abandons": 0}
+              "decision_hors_delai": 0, "abandons": 0, "surveillance": 0}
     now = db.utcnow()
     today = now.date()
 
@@ -75,6 +75,23 @@ def run_automations(conn):
                       f"Votre certification OFDTI {c['numero']} a expiré le {c['date_expiration'][:10]}.",
                       lien=f"/certificats/{c['id']}/print", cle=f"expire:{c['id']}")
             continue
+        age_mois = (now - db.parse(c["date_delivrance"])).days / 30.44
+        surv_deb = int(db.get_param(conn, "surveillance_debut_mois", "24"))
+        surv_fin = int(db.get_param(conn, "surveillance_fin_mois", "48"))
+        if surv_deb <= age_mois <= surv_fin:
+            db.notify_role(conn, "admin", "surveillance",
+                           f"Audit de surveillance à planifier — {c['numero']}",
+                           f"Le certificat OFDTI {c['numero']} ({c['candidat_nom']}) a {age_mois:.0f} mois : l'audit de surveillance (fenêtre {surv_deb}–{surv_fin} mois, audit aléatoire avec observation d'une session de formation en temps réel, Manuel Qualité §7.12) doit être planifié.",
+                           lien=f"/dossiers/{c['dossier_id']}", cle=f"surv:{c['id']}")
+            db.notify(conn, c["candidat_id"], "surveillance",
+                      f"Audit de surveillance de votre certification {c['numero']}",
+                      f"Votre certification OFDTI {c['numero']} entre dans la fenêtre de surveillance ({surv_deb}–{surv_fin} mois après la délivrance). LCP planifie un audit aléatoire (observation d'une session de formation en temps réel).",
+                      lien=f"/certificats/{c['id']}/print", cle=f"surv:{c['id']}:cand")
+            db.send_email(conn, c["candidat_email"],
+                          f"[LCP] Audit de surveillance de votre certification OFDTI {c['numero']}",
+                          f"Bonjour,\n\nVotre certification OFDTI {c['numero']} entre dans la fenêtre de surveillance ({surv_deb}–{surv_fin} mois après la délivrance). LCP planifie un audit de surveillance aléatoire (observation d'une session de formation en temps réel).\n\nLCP — Certification OFDTI",
+                          dossier_id=c["dossier_id"])
+            result["surveillance"] += 1
         for seuil in seuils:
             if 0 <= jours_restants <= seuil:
                 db.notify(conn, c["candidat_id"], "cert_expiration",

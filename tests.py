@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 import http.cookiejar
 import zipfile
+from datetime import timedelta
 
 BASE = "http://127.0.0.1:8765"
 DB = "/tmp/test_crm_lcp.db"
@@ -268,6 +269,31 @@ def main():
         check("mots de passe différents refusés", "ne correspondent pas" in r.read().decode("utf-8"))
         r = post(make_opener(), "/inscription", {"organisme": "X", "nom": "Y", "email": "court@test.fr", "password": "court", "password2": "court"})
         check("mot de passe trop court refusé", "8 caractères" in r.read().decode("utf-8"))
+
+        page = get(cand, "/documents").read().decode("utf-8")
+        check("manuel qualité V014 listé dans /documents", "Manuel_qualite_OFDTI_V014.pdf" in page)
+        r = get(cand, "/documents/Manuel_qualite_OFDTI_V014.pdf")
+        data = r.read()
+        check("manuel qualité V014 servi en PDF", r.status == 200 and data[:5] == b"%PDF-" and "pdf" in (r.headers.get("Content-Type") or ""))
+
+        os.environ["CRM_LCP_DB"] = "/tmp/test_crm_lcp_auto.db"
+        if os.path.exists("/tmp/test_crm_lcp_auto.db"):
+            os.remove("/tmp/test_crm_lcp_auto.db")
+        import db as tdb
+        import automations
+        tdb.init_db(reset=True)
+        conn = tdb.connect()
+        did = conn.execute("SELECT id FROM dossiers ORDER BY id LIMIT 1").fetchone()["id"]
+        conn.execute("DELETE FROM certificats")
+        conn.execute(
+            "INSERT INTO certificats(dossier_id, numero, date_delivrance, date_expiration, statut, created_at) VALUES (?, 'OFDTI-TEST-0001', ?, ?, 'valide', ?)",
+            (did, tdb.iso(tdb.utcnow() - timedelta(days=25 * 30)), tdb.iso(tdb.utcnow() + timedelta(days=35 * 30)), tdb.now()),
+        )
+        conn.commit()
+        res = automations.run_automations(conn)
+        n = conn.execute("SELECT COUNT(*) AS c FROM notifications WHERE cle LIKE 'surv:%'").fetchone()["c"]
+        conn.close()
+        check("alerte fenêtre surveillance 24-48 mois (Manuel Qualité §7.12)", res.get("surveillance", 0) >= 1 and n >= 1, f"surv={res.get('surveillance')} notifs={n}")
 
     finally:
         proc.terminate()
